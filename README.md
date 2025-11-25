@@ -14,7 +14,7 @@
 | 1.4 | AE - CycleGAN | ⬜ |
 | 1.5 | VAE (Variational Autoencoder) | ⬜ |
 | 1.6 | VAE-GAN | ⬜ |
-| 1.7 | Cycle - VAE (Generative Adversarial Network) | ⬜ |
+| 1.7 | Cycle - VAE | ⬜ |
 | 1.8 | VAE-CycleGAN | ⬜ |
 | 2 | **Constitute Dataset** | ⬜ |
 | 3 | **Training** | |
