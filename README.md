@@ -10,7 +10,7 @@
 | 1 | **Implement Networks** | |
 | 1.1 | AE (Autoencoder) | ⬜ |
 | 1.2 | AE - GAN (Generative Adversarial Network) | ⬜ |
-| 1.3 | Cycle - AE (Generative Adversarial Network) | ⬜ |
+| 1.3 | Cycle - AE | ⬜ |
 | 1.4 | AE - CycleGAN | ⬜ |
 | 1.5 | VAE (Variational Autoencoder) | ⬜ |
 | 1.6 | VAE-GAN | ⬜ |
