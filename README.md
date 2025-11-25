@@ -5,7 +5,7 @@
 | Step | Task | Status |
 |------|------|--------|
 | 0 |**Paper Study** | |
-| 0.1 | Download the [file:///C:/Users/bapti/Downloads/13034_VAE_CycleGAN_Variational.pdf][paper] |✅|
+| 0.1 | Download the [paper](file:///C:/Users/bapti/Downloads/13034_VAE_CycleGAN_Variational.pdf) |✅|
 | 0.2 | Determine Networks Architectures | ⬜ |
 | 1 | **Implement Networks** | |
 | 1.1 | AE (Autoencoder) | ⬜ |
