@@ -16,7 +16,9 @@
 | 1.6 | VAE-GAN | ⬜ |
 | 1.7 | Cycle - VAE | ⬜ |
 | 1.8 | VAE-CycleGAN | ⬜ |
-| 2 | **Constitute Dataset** | ⬜ |
+| 2 | **Constitute the Datasets** | ⬜ |
+| 2.1 | Constitute a paired dataset (work for all architectures) | ⬜ |
+| 2.2 | Constitute an unpaired dataset (face to face, day to night, rainy to sunny ... ) | ⬜ |
 | 3 | **Training** | |
 | 3.1 | Train AE | ⬜ |
 | 3.2 | Train AE - GAN | ⬜ |
@@ -27,5 +29,5 @@
 | 3.7 | Train Cycle - VAE | ⬜ |
 | 3.8 | Train VAE-CycleGAN | ⬜ |
 | 4 | **Extensions** | |
-| 4.1 | Domain Adaptation | ⬜ |
-| 4.2 | Transfer Learning on New Translation Task | ⬜ |
+| 4.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
+| 4.2 | Transfer Learning on New Translation Task ? | ⬜ |
