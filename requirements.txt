@@ -1,0 +1,6 @@
+requests
+h5py
+numpy
+matplotlib
+pandas
+Pillow

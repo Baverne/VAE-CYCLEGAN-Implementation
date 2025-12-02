@@ -16,8 +16,8 @@
 | 1.6 | VAE-GAN | ⬜ |
 | 1.7 | Cycle - VAE | ⬜ |
 | 1.8 | VAE-CycleGAN | ⬜ |
-| 2 | **Constitute the Datasets** | ⬜ |
-| 2.1 | Constitute a paired dataset (work for all architectures) | ⬜ |
+| 2 | **Constitute the Datasets** | |
+| 2.1 | Constitute a paired dataset (work for all architectures) | ✅ |
 | 2.2 | Constitute an unpaired dataset (face to face, day to night, rainy to sunny ... ) | ⬜ |
 | 3 | **Training** | |
 | 3.1 | Train AE | ⬜ |
@@ -28,6 +28,57 @@
 | 3.6 | Train VAE-GAN | ⬜ |
 | 3.7 | Train Cycle - VAE | ⬜ |
 | 3.8 | Train VAE-CycleGAN | ⬜ |
+<<<<<<< HEAD
+| 4 | **Extensions** | |
+| 4.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
+| 4.2 | Transfer Learning on New Translation Task ? | ⬜ |
+
+## Dataset
+
+We use the **Hypersim Dataset**, a synthetic dataset that provides photorealistic images with extra modalities for various environments.
+
+### Downloading the Dataset
+
+The full Hypersim dataset is quite large (~1.9 TB). For practical purposes, we provide a script to download a smaller, diverse sample of the dataset.
+The dataset can be downloaded using the provided script that samples diverse images from the full Hypersim dataset:
+
+```powershell
+python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_modalities --repo_path path\to\ml-hypersim --output_dir datasets --seed 42
+```
+
+**Prerequisites:**
+1. Clone the ml-hypersim repository:
+   ```powershell
+   git clone https://github.com/apple/ml-hypersim
+   ```
+
+2. Install required dependencies:
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+### Dataset Source
+
+The Hypersim Dataset is publicly available at: https://github.com/apple/ml-hypersim
+
+### Citation
+
+If you use the Hypersim Dataset in your research, please cite the following paper:
+
+```bibtex
+@inproceedings{roberts:2021,
+    author    = {Mike Roberts AND Jason Ramapuram AND Anurag Ranjan AND Atulit Kumar AND
+                 Miguel Angel Bautista AND Nathan Paczan AND Russ Webb AND Joshua M. Susskind},
+    title     = {{Hypersim}: {A} Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding},
+    booktitle = {International Conference on Computer Vision (ICCV) 2021},
+    year      = {2021}
+}
+```
+
+### License
+
+The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).
+=======
 | 4 | **Create the latex summary** | ⬜ |
 | 4.1 | Introduction (Paper, Motivation, problem statement, related work...) | ⬜ |
 | 4.2 | Methodology (Architectures, Loss functions, Datasets, Training details, Decisions we made ...) | ⬜ |
@@ -36,3 +87,4 @@
 | 5 | **Extensions** | |
 | 5.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
 | 5.2 | Transfer Learning on New Translation Task ? | ⬜ |
+>>>>>>> 6a4d8c990aa1374786e18c2aa6314c289b565f2a
