@@ -28,6 +28,11 @@
 | 3.6 | Train VAE-GAN | ⬜ |
 | 3.7 | Train Cycle - VAE | ⬜ |
 | 3.8 | Train VAE-CycleGAN | ⬜ |
-| 4 | **Extensions** | |
-| 4.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
-| 4.2 | Transfer Learning on New Translation Task ? | ⬜ |
+| 4 | **Create the latex summary** | ⬜ |
+| 4.1 | Introduction (Paper, Motivation, problem statement, related work...) | ⬜ |
+| 4.2 | Methodology (Architectures, Loss functions, Datasets, Training details, Decisions we made ...) | ⬜ |
+| 4.3 | Experiments and Results (Quantitative and Qualitative results, Analysis ...) | ⬜ |
+| 4.4 | Conclusion and Future Work | ⬜ |
+| 5 | **Extensions** | |
+| 5.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
+| 5.2 | Transfer Learning on New Translation Task ? | ⬜ |
