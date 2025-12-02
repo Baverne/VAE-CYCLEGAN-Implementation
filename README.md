@@ -28,10 +28,14 @@
 | 3.6 | Train VAE-GAN | ⬜ |
 | 3.7 | Train Cycle - VAE | ⬜ |
 | 3.8 | Train VAE-CycleGAN | ⬜ |
-<<<<<<< HEAD
-| 4 | **Extensions** | |
-| 4.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
-| 4.2 | Transfer Learning on New Translation Task ? | ⬜ |
+| 4 | **Create the latex summary** | ⬜ |
+| 4.1 | Introduction (Paper, Motivation, problem statement, related work...) | ⬜ |
+| 4.2 | Methodology (Architectures, Loss functions, Datasets, Training details, Decisions we made ...) | ⬜ |
+| 4.3 | Experiments and Results (Quantitative and Qualitative results, Analysis ...) | ⬜ |
+| 4.4 | Conclusion and Future Work | ⬜ |
+| 5 | **Extensions** | |
+| 5.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
+| 5.2 | Transfer Learning on New Translation Task ? | ⬜ |
 
 ## Dataset
 
@@ -78,13 +82,4 @@ If you use the Hypersim Dataset in your research, please cite the following pape
 ### License
 
 The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).
-=======
-| 4 | **Create the latex summary** | ⬜ |
-| 4.1 | Introduction (Paper, Motivation, problem statement, related work...) | ⬜ |
-| 4.2 | Methodology (Architectures, Loss functions, Datasets, Training details, Decisions we made ...) | ⬜ |
-| 4.3 | Experiments and Results (Quantitative and Qualitative results, Analysis ...) | ⬜ |
-| 4.4 | Conclusion and Future Work | ⬜ |
-| 5 | **Extensions** | |
-| 5.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
-| 5.2 | Transfer Learning on New Translation Task ? | ⬜ |
->>>>>>> 6a4d8c990aa1374786e18c2aa6314c289b565f2a
+
