@@ -6,7 +6,7 @@
 |------|------|--------|
 | 0 |**Paper Study** | |
 | 0.1 | Download the [paper](https://openreview.net/pdf?id=fu0NN8GRQ7) |✅|
-| 0.2 | Determine Networks Architectures | ⬜ |
+| 0.2 | Determine Networks Architectures | ✅ |
 | 1 | **Implement Networks** | |
 | 1.1 | AE (Autoencoder) | ⬜ |
 | 1.2 | AE - GAN (Generative Adversarial Network) | ⬜ |
@@ -83,3 +83,60 @@ If you use the Hypersim Dataset in your research, please cite the following pape
 
 The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).
 
+## Training
+
+
+### Training the Auto-Encoder
+
+The training script supports multiple network architectures. For now, it only features the Auto-Encoder:
+
+**Basic usage:**
+```powershell
+python train.py --architecture ae --source_modality depth --target_modality depth --epochs 10 --save_freq 5 --log_image_freq 2
+```
+
+**Training options:**
+
+- `--architecture`: Choose the network architecture (`ae`, `vae`,`vae_gan`, etc.)
+- `--source_modality`: Input modality (e.g., `depth`, `normal`, `semantic`, `color`)
+- `--target_modality`: Target modality (e.g., `normal`, `depth`, `semantic`, `color`)
+- `--data_dir`: Path to the dataset directory (default: `datasets`)
+- `--batch_size`: Batch size for training (default: `4`)
+- `--epochs`: Number of training epochs (default: `100`)
+- `--lr`: Learning rate (default: `0.0002`)
+- `--image_size`: Image size for training (default: `256`)
+- `--val_split`: Validation split ratio (default: `0.1`)
+- `--output_dir`: Directory to save models and logs (default: `output`)
+- `--save_freq`: Save checkpoint every N epochs (default: `10`)
+- `--log_image_freq`: Log images to TensorBoard every N epochs (default: `5`)
+- `--resume`: Path to checkpoint to resume training
+
+**Example commands:**
+
+Train Auto-Encoder (depth → normal):
+```powershell
+python train.py --architecture autoencoder --source_modality depth --target_modality normal --batch_size 8 --epochs 100
+```
+
+Train VAE (depth → normal):
+```powershell
+python train.py --architecture vae --source_modality depth --target_modality normal --latent_dim 1024 --lambda_kl 1e-5 --epochs 100
+```
+
+Resume training from checkpoint:
+```powershell
+python train.py --architecture autoencoder --resume output/autoencoder_20231228_120000/checkpoint_epoch_50.pth
+```
+
+### Output Structure
+
+Training outputs are saved in the `output` directory with the following structure:
+```
+output/
+  autoencoder_20231228_120000/
+    args.json                 # Training arguments
+    checkpoint_epoch_10.pth   # Periodic checkpoints
+    checkpoint_epoch_20.pth
+    best_model.pth           # Best model based on validation loss
+    tensorboard/             # TensorBoard logs
+```

@@ -29,7 +29,7 @@ class HypersimDataset(Dataset):
         root_dir: Root directory containing scene folders
         modalities: List of modalities to load (e.g., ['depth', 'semantic', 'normal', 'color'])
         transform: Optional transform to apply to all modalities
-        beauty_transform: Optional transform specifically for beauty/color images
+        color_transform: Optional transform specifically for color/color images
         return_scene_info: Whether to return scene and camera number and scene type in the batch
     """
     
@@ -38,13 +38,13 @@ class HypersimDataset(Dataset):
         root_dir: str,
         modalities: List[str] = ['color','depth','normal_world','normal','semantic','semantic_instance','normal'],
         transform: Optional[Callable] = None,
-        beauty_transform: Optional[Callable] = None,
+        color_transform: Optional[Callable] = None,
         return_scene_info: bool = True
     ):
         self.root_dir = Path(root_dir)
         self.modalities = modalities
         self.transform = transform
-        self.beauty_transform = beauty_transform
+        self.color_transform = color_transform
         self.return_scene_info = return_scene_info
         
         # Scan dataset and build file index
@@ -150,24 +150,51 @@ class HypersimDataset(Dataset):
         
         result = {}
         
-        # Load each modality
+        # First, load all modalities as PIL images
+        pil_images = {}
         for modality, path in sample_info['modality_paths'].items():
-            # Load image
-            img = Image.open(path).convert('RGB')
-    
+            pil_images[modality] = Image.open(path).convert('RGB')
+        
+        # Apply general transform to all modalities with the same random state
+        if self.transform is not None:
+            # Set random seed based on index to ensure reproducibility if needed
+            # But allow random transforms to be the same across modalities
+            random_state = torch.get_rng_state()
             
-            # Apply transforms
-            if modality == 'color' and self.beauty_transform is not None:
-                # Use specific beauty transform for color/beauty images
-                img_tensor = self.beauty_transform(img)
-            elif self.transform is not None:
-                # Use general transform
-                img_tensor = self.transform(img)
-            else:
-                # Default: convert to tensor
-                img_tensor = transforms.ToTensor()(img)
-            
-            result[modality] = img_tensor
+            for modality, img in pil_images.items():
+                # Reset random state for each modality to ensure same transform
+                torch.set_rng_state(random_state)
+                
+                # Apply general transform (spatial transforms will be identical)
+                transformed_img = self.transform(img)
+                
+                # Apply color-specific transform for color modality (in addition to general transform)
+                if modality == 'color' and self.color_transform is not None:
+                    # If transform returns tensor, convert back to PIL for color transform
+                    if isinstance(transformed_img, torch.Tensor):
+                        # Convert tensor back to PIL for color transform
+                        transformed_img = transforms.ToPILImage()(transformed_img)
+                        transformed_img = self.color_transform(transformed_img)
+                        # ToTensor will be applied below
+                    else:
+                        transformed_img = self.color_transform(transformed_img)
+                
+                # Ensure final result is a tensor
+                if not isinstance(transformed_img, torch.Tensor):
+                    transformed_img = transforms.ToTensor()(transformed_img)
+                
+                result[modality] = transformed_img
+        else:
+            # No transform provided - apply color transform to color if available, then convert to tensor
+            for modality, img in pil_images.items():
+                if modality == 'color' and self.color_transform is not None:
+                    img = self.color_transform(img)
+                
+                # Convert to tensor if not already
+                if not isinstance(img, torch.Tensor):
+                    img = transforms.ToTensor()(img)
+                
+                result[modality] = img
         
         # Add scene information if requested
         if self.return_scene_info:
@@ -200,7 +227,7 @@ class HypersimDataset(Dataset):
         filtered_dataset.root_dir = self.root_dir
         filtered_dataset.modalities = self.modalities
         filtered_dataset.transform = self.transform
-        filtered_dataset.beauty_transform = self.beauty_transform
+        filtered_dataset.color_transform = self.color_transform
         filtered_dataset.return_scene_info = self.return_scene_info
         filtered_dataset.samples = [
             s for s in self.samples if s['scene_num'] in scene_nums
@@ -219,7 +246,7 @@ class HypersimDataset(Dataset):
         filtered_dataset.root_dir = self.root_dir
         filtered_dataset.modalities = self.modalities
         filtered_dataset.transform = self.transform
-        filtered_dataset.beauty_transform = self.beauty_transform
+        filtered_dataset.color_transform = self.color_transform
         filtered_dataset.return_scene_info = self.return_scene_info
         filtered_dataset.samples = [
             s for s in self.samples if s['scene_type'] in scene_types
@@ -228,7 +255,7 @@ class HypersimDataset(Dataset):
 
 
 if __name__ == "__main__":
-
+    """
     # Basic usage without transforms
 
     dataset = HypersimDataset(
@@ -252,7 +279,7 @@ if __name__ == "__main__":
         print(f"depth max min : {batch['depth'].min()} , {batch['depth'].max()}")
         print(f"semantic max min : {batch['semantic'].min()} , {batch['semantic'].max()}")
         break
-    
+    """
     # Example 2: With data augmentation transforms
     
     # Define augmentation transform for general modalities (depth, semantic, normal)
@@ -260,17 +287,12 @@ if __name__ == "__main__":
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.3),
         transforms.RandomRotation(degrees=15),
-        transforms.RandomResizedCrop(size=256, scale=(0.33, 1.0), ratio=(0.9, 1.1), interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        transforms.RandomResizedCrop(size=256, scale=(0.33, 1.0), ratio=(1,1), interpolation=transforms.InterpolationMode.BICUBIC),
     ])
     
-    # Define augmentation transform specifically for beauty/color images
-    beauty_transform = transforms.Compose([
+    # Define augmentation transform specifically for color/color images
+    color_transform = transforms.Compose([
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
-        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-        transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
-        transforms.ToTensor()
     ])
     
     # Create dataset with transforms
@@ -278,8 +300,7 @@ if __name__ == "__main__":
         root_dir='datasets',
         modalities=['depth', 'semantic', 'normal'],
         transform=general_transform,
-        beauty_transform=beauty_transform, 
-        target_size=(256, 256),
+        color_transform=color_transform, 
         return_scene_info=True
     )
     

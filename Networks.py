@@ -14,9 +14,9 @@ class CaSb (nn.Module):
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, padding_mode='reflect')
         self.norm = nn.InstanceNorm2d(out_channels)
         if activation == "ReLU":
-            self.activation = nn.ReLU(inplace=True)
+            self.activation = nn.ReLU(inplace=False)
         elif activation == "LeakyReLU":
-            self.activation = nn.LeakyReLU(0.2, inplace=True)
+            self.activation = nn.LeakyReLU(0.2, inplace=False)
         elif activation == "Tanh":
             self.activation = nn.Tanh()
         else :
@@ -26,7 +26,6 @@ class CaSb (nn.Module):
         x = self.conv(x)
         x = self.norm(x)
         x = self.activation(x)
-        print(x.shape)
         return x
 
 class D (nn.Module):
@@ -35,7 +34,7 @@ class D (nn.Module):
         self.PixelUnshuffle = nn.PixelUnshuffle(downscale_factor=2)
         self.conv = nn.Conv2d(in_channels*4, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='reflect')
         self.norm = nn.InstanceNorm2d(out_channels)
-        self.activation = nn.ReLU(inplace=True)
+        self.activation = nn.ReLU(inplace=False)
 
     def forward(self, x):
         x = self.PixelUnshuffle(x)
@@ -49,10 +48,10 @@ class R (nn.Module):
         super(R, self).__init__()
         self.conv1 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='reflect')
         self.norm1 = nn.InstanceNorm2d(out_channels)
-        self.activation1 = nn.ReLU(inplace=True)
+        self.activation1 = nn.ReLU(inplace=False)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='reflect')
         self.norm2 = nn.InstanceNorm2d(out_channels)
-        self.activation2 = nn.ReLU(inplace=True)
+        self.activation2 = nn.ReLU(inplace=False)
 
     def forward(self, x):
         residual = x
@@ -62,7 +61,7 @@ class R (nn.Module):
         x = self.conv2(x)
         x = self.norm2(x)
         x = self.activation2(x)
-        x += residual
+        x = x + residual
         return x
 
 class U (nn.Module):
@@ -71,7 +70,7 @@ class U (nn.Module):
         self.PixelShuffle = nn.PixelShuffle(upscale_factor=2)
         self.conv = nn.Conv2d(in_channels//4, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='reflect')
         self.norm = nn.InstanceNorm2d(out_channels)
-        self.activation = nn.ReLU(inplace=True)
+        self.activation = nn.ReLU(inplace=False)
 
     def forward(self, x):
         x = self.PixelShuffle(x)
@@ -166,7 +165,7 @@ class Autoencoder (nn.Module):
         return Gx
 
 class VariationalAutoencoder (nn.Module):
-    def __init__(self, latent_dim):
+    def __init__(self, latent_dim=64):
         super(VariationalAutoencoder, self).__init__()
         self.encoder = Encoder()
         self.variational_encoder_block = VariationalEncoderBlock(in_channels=1024, latent_dim=latent_dim)
@@ -300,7 +299,7 @@ if __name__ == "__main__":
     print("Encoded shape:", z.shape)
     x_recon = decoder(z)
     print("Reconstructed shape:", x_recon.shape)
-    vae = VariationalAutoencoder(latent_dim=128).to(device)
+    vae = VariationalAutoencoder(latent_dim=64).to(device)
     x_recon, mu, logvar = vae(x)
     print("VAE Reconstructed shape:", x_recon.shape)
     print("VAE Mu shape:", mu.shape)
@@ -309,14 +308,14 @@ if __name__ == "__main__":
     validity = discriminator(x)
     print("Discriminator output shape:", validity.shape)
 
-    aegan = AEGAN(latent_dim=128).to(device)
-    x_recon, validity = aegan(x)
-    print("AEGAN Reconstructed shape:", x_recon.shape)
-    print("AEGAN Discriminator output shape:", validity.shape)
-    vaegan = VAEGAN(latent_dim=128).to(device)
-    x_recon, mu, logvar, validity = vaegan(x)
-    print("VAEGAN Reconstructed shape:", x_recon.shape)
-    print("VAEGAN Discriminator output shape:", validity.shape)
+    aegan = AEGAN(latent_dim=64).to(device)
+    Gx, DGx, Dx = aegan(x)
+    print("AEGAN Reconstructed shape:", Gx.shape)
+    print("AEGAN Discriminator output shape:", DGx.shape)
+    vaegan = VAEGAN(latent_dim=64).to(device)
+    Gx, mu, logvar,DGx, Dx, = vaegan(x)
+    print("VAEGAN Reconstructed shape:", Gx.shape)
+    print("VAEGAN Discriminator output shape:", DGx.shape)
     cycle_ae = CycleAE().to(device)
     y = torch.randn((10, 3, 256, 256)).to(device)
     Gx, FGx, Fy, GFy = cycle_ae(x, y)
