@@ -2,6 +2,16 @@
 """
 Training script for all compared model architectures
 
+This script sequentially :
+1. Set up data loaders with appropriate augmentations.
+2. Create the specified model architecture.
+3. Configure optimizers and loss functions(Strongly relies on the model specific training_step and validation_step methods).
+4. Optionally load from a checkpoint to resume training.
+5. Run the training loop  (Strongly relies on the model specific training_step and validation_step methods).
+6. Save checkpoints and log metrics/images to TensorBoard.
+
+
+It is designed to adapt to all the architectures implemented in Networks.py. Even though they have very different training procedures.
 """
 
 import os
@@ -18,58 +28,51 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import networks, losses, and data manager
-from Networks import *
-from Losses import *
-from Data_Manager import HypersimDataset
+from networks import *
+from data_Manager import HypersimDataset
 
 
-def create_model(args):
+def create_model(architecture):
     """Create model based on architecture choice"""
-    if args.architecture == 'autoencoder':
+    if architecture == 'autoencoder':
         model = Autoencoder()
         print(f"Created Autoencoder")
-    elif args.architecture == 'vae':
+    elif architecture == 'vae':
         model = VariationalAutoencoder()
         print(f"Created Variational Autoencoder")
+    elif architecture == 'aegan':
+        model = AEGAN()
+        print(f"Created Autoencoder GAN")
     else:
-        raise ValueError(f"Unknown architecture: {args.architecture}")
+        raise ValueError(f"Unknown architecture: {architecture}")
     
     return model
 
 
-def create_loss_function(args):
-    """Create loss function based on architecture choice"""
-    if args.architecture == 'ae':
-        criterion = AELoss()
-        print("Using AE Loss (L1 Reconstruction)")
-    elif args.architecture == 'vae':
-        criterion = VAELoss()
-        print(f"Using VAE Loss (L1 + KL)")
-    else:
-        raise ValueError(f"Unknown architecture: {args.architecture}")
-    
-    return criterion
-
-
-def save_checkpoint(model, optimizer, epoch, loss, args, filename):
+def save_checkpoint(model, epoch, loss, args, filename):
     """Save model checkpoint"""
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
+        'optimizer_states': model.save_optimizer_states(),
         'loss': loss,
         'args': vars(args)
     }
+    
     torch.save(checkpoint, filename)
     print(f"Checkpoint saved to {filename}")
 
 
-def load_checkpoint(model, optimizer, filename, device):
-    """Load model checkpoint, retrives epoch and loss from metadata"""
+def load_checkpoint(model, filename, device):
+    """Load model checkpoint, retrieves epoch and loss from metadata"""
     if os.path.exists(filename):
         checkpoint = torch.load(filename, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Load optimizer state(s)
+        if 'optimizer_states' in checkpoint:
+            model.load_optimizer_states(checkpoint['optimizer_states'])
+        
         epoch = checkpoint['epoch']
         loss = checkpoint['loss']
         print(f"Loaded checkpoint from {filename} (epoch {epoch}, loss {loss:.4f})")
@@ -78,113 +81,96 @@ def load_checkpoint(model, optimizer, filename, device):
         raise FileNotFoundError(f"No checkpoint found at {filename}")
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, args, writer=None, epoch=0):
+def train_epoch(model, dataloader, device, args):
     """Train for one epoch"""
     model.train()
     total_loss = 0.0
     loss_components = {}
+    last_output = None
+    last_x = None
+    last_y = None
     
     pbar = tqdm(dataloader, desc='Training')
     for batch_idx, batch in enumerate(pbar):
-        # Get input and target modalities
-        x = batch[args.source_modality].to(device)
-        y = batch[args.target_modality].to(device)
+        # Prepare batch (move to device)
+        batch['x'] = batch['x'].to(device)
+        batch['y'] = batch['y'].to(device)
         
-        # Forward pass
-        optimizer.zero_grad()
-        
-        if args.architecture == 'autoencoder':
-            output = model(x)
-            loss, losses_dict = criterion(output, x, y)
-        elif args.architecture == 'vae':
-            output, mu, logvar = model(x)
-            loss, losses_dict = criterion((output, mu, logvar), x, y)
-        
-        # Backward pass
-        loss.backward()
-        optimizer.step()
+        # Model handles : forward, loss, backward, optimizer step
+        metrics = model.training_step(batch)
         
         # Track losses
-        total_loss += loss.item()
-        for key, value in losses_dict.items():
+        total_loss += metrics['G_loss']
+        for key, value in metrics.items():
             if key not in loss_components:
                 loss_components[key] = 0.0
             loss_components[key] += value
         
         # Update progress bar
-        pbar.set_postfix({'loss': loss.item()})
+        pbar.set_postfix({'loss': metrics['G_loss']})
+        
+        # Keep last batch for visualization
+        last_x = batch['x']
+        last_y = batch['y']
+        with torch.no_grad():
+            last_output = model(last_x)[0] # Get output only (first element)
     
     # Average losses
     avg_loss = total_loss / len(dataloader)
     avg_loss_components = {k: v / len(dataloader) for k, v in loss_components.items()}
     
-    return avg_loss, avg_loss_components, output, x, y
+    return avg_loss, avg_loss_components, last_output, last_x, last_y
 
 
-def validate(model, dataloader, criterion, device, args):
+def validate(model, dataloader, device, args):
     """Run validation on the test set"""
     model.eval()
     total_loss = 0.0
     loss_components = {}
+    last_output = None
+    last_x = None
+    last_y = None
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc='Validation'):
-            # Get input and target modalities
-            x = batch[args.source_modality].to(device)
-            y = batch[args.target_modality].to(device)
+            # Prepare batch (move to device)
+            batch['x'] = batch['x'].to(device)
+            batch['y'] = batch['y'].to(device)
             
-            # Forward pass
-            if args.architecture == 'autoencoder':
-                output = model(x)
-                loss, losses_dict = criterion(output, x, y)
-            elif args.architecture == 'vae':
-                output, mu, logvar = model(x)
-                loss, losses_dict = criterion((output, mu, logvar), x, y)
+            # Model handles validation
+            metrics = model.validation_step(batch)
+            
+            # Extract output for visualization
+            output = metrics.pop('output')
             
             # Track losses
-            total_loss += loss.item()
-            for key, value in losses_dict.items():
+            total_loss += metrics['G_loss']
+            for key, value in metrics.items():
                 if key not in loss_components:
                     loss_components[key] = 0.0
                 loss_components[key] += value
+            
+            # Keep last batch for visualization
+            last_output = output
+            last_x = batch['x']
+            last_y = batch['y']
     
     # Average losses
     avg_loss = total_loss / len(dataloader)
     avg_loss_components = {k: v / len(dataloader) for k, v in loss_components.items()}
     
-    return avg_loss, avg_loss_components, output, x, y
+    return avg_loss, avg_loss_components, last_output, last_x, last_y
 
 
-def main(args):
-
-    # Checks of good practice
-    if args.architecture == 'autoencoder' or args.architecture == 'vae' :
-        if args.source_modality != args.target_modality:
-            raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
+def create_dataloaders(args):
+    """
+    Create train and test dataloaders with appropriate transforms
     
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
-    print(f"Using device: {device}")
-    
-    # Create output directory
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Output directory: {output_dir}")
-    
-    # Save arguments
-    with open(output_dir / 'args.json', 'w') as f:
-        json.dump(vars(args), f, indent=2)
-    
-    # Create TensorBoard writer
-    tensorboard_dir = output_dir / 'tensorboard'
-    writer = SummaryWriter(log_dir=tensorboard_dir)
-    print(f"TensorBoard logs: {tensorboard_dir}")
-    print(f"Run 'tensorboard --logdir={tensorboard_dir}' to visualize")
-    
-    
-    # Create datasets
-        ## Define augmentation transform for general modalities (depth, semantic, normal)
+    Returns:
+        train_loader: DataLoader for training
+        test_loader: DataLoader for testing (or None if test_split=0)
+    """
+    # Define augmentation transform for general modalities (depth, semantic, normal)
     general_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.3),
@@ -192,12 +178,12 @@ def main(args):
         transforms.RandomResizedCrop(size=args.image_size, scale=(0.33, 1.0), ratio=(1,1), interpolation=transforms.InterpolationMode.BICUBIC),
     ])
     
-        ## Define augmentation transform specifically for color images
+    # Define augmentation transform specifically for color images
     color_transform = transforms.Compose([
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
     ])
     
-        ## Create dataset with transforms
+    # Create dataset with transforms
     train_dataset = HypersimDataset(
         root_dir=args.data_dir,
         modalities=[args.source_modality, args.target_modality],
@@ -237,33 +223,74 @@ def main(args):
             pin_memory=True
         )
     
+    return train_loader, test_loader
+
+
+def main(args):
+
+    # Checks of good practice
+    if not args.architecture in ['autoencoder', 'vae']:
+        if args.source_modality != args.target_modality:
+            raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
+    
+    # Set device
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
+    print(f"Using device: {device}")
+    
+    # Create output directory
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir}")
+    
+    # Save arguments
+    with open(output_dir / 'args.json', 'w') as f:
+        json.dump(vars(args), f, indent=2)
+    
+    # Create TensorBoard writer
+    tensorboard_dir = output_dir / 'tensorboard'
+    writer = SummaryWriter(log_dir=tensorboard_dir)
+    print(f"TensorBoard logs: {tensorboard_dir}")
+    print(f"Run 'tensorboard --logdir={tensorboard_dir}' to visualize")
+    
+    # Create dataloaders
+    train_loader, test_loader = create_dataloaders(args)
+    
     # Create model
-    model = create_model(args).to(device)
+    model = create_model(args.architecture).to(device)
     
-    # Create optimizer
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    # Configure model optimizers and losses
+    model.configure_optimizers(lr=args.lr) # Each model will create its own optimizers
+    model.configure_loss(
+        lambda_kl=args.lambda_kl,
+        lambda_gan=args.lambda_gan,
+        lambda_identity=args.lambda_identity
+    ) # We give all the lambdas even if not used by the architecture, the model will pick what it needs
     
-    # Create loss function
-    criterion = create_loss_function(args)
+    print(f"Model configured with optimizers and loss functions")
     
     # Load checkpoint if resuming
     start_epoch = 0
     if args.resume:
+        print(f"Resuming from checkpoint: {args.resume}")
         checkpoint_path = Path(args.resume)
         if checkpoint_path.exists():
-            start_epoch, _ = load_checkpoint(model, optimizer, checkpoint_path, device)
+            start_epoch, _ = load_checkpoint(model, checkpoint_path, device)
             start_epoch += 1
     
     # Training loop
     print(f"\nStarting training for {args.epochs} epochs...")
     best_test_loss = float('inf')
     
+
+    #### ACTUAL TRAINING LOOP ####
+
     for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch + 1}/{args.epochs}")
         
         # Train
         train_loss, train_loss_components, train_output, train_x, train_y = train_epoch(
-            model, train_loader, criterion, optimizer, device, args
+            model, train_loader, device, args
         )
         print(f"Train Loss: {train_loss:.4f}")
         for key, value in train_loss_components.items():
@@ -278,7 +305,7 @@ def main(args):
         # On test set
         if test_loader is not None:
             test_loss, test_loss_components, test_output, test_x, test_y = validate(
-                model, test_loader, criterion, device, args
+                model, test_loader, device, args
             )
             print(f"Test Loss: {test_loss:.4f}")
             for key, value in test_loss_components.items():
@@ -304,13 +331,13 @@ def main(args):
         # Save checkpoint
         if (epoch + 1) % args.save_freq == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch + 1}.pth"
-            save_checkpoint(model, optimizer, epoch, train_loss, args, checkpoint_path)
+            save_checkpoint(model, epoch, train_loss, args, checkpoint_path)
         
         # Save best model
         if test_loss < best_test_loss:
             best_test_loss = test_loss
             best_path = output_dir / "best_model.pth"
-            save_checkpoint(model, optimizer, epoch, test_loss, args, best_path)
+            save_checkpoint(model, epoch, test_loss, args, best_path)
             print(f"New best model saved (test_loss: {test_loss:.4f})")
     
     # Close TensorBoard writer
@@ -319,12 +346,15 @@ def main(args):
     print(f"TensorBoard logs : tensorboard --logdir={tensorboard_dir}")
 
 
+
 if __name__ == '__main__':
+
+    ##### ARGUMENTS DEFINITION #####
     parser = argparse.ArgumentParser(description='Train VAE-CycleGAN models')
     
     # Architecture selection
-    parser.add_argument('--architecture', type=str, default='ae',
-                        choices=['ae', 'vae'], ## rest of architectures can be added here
+    parser.add_argument('--architecture', type=str, default='autoencoder',
+                        choices=['autoencoder', 'vae', 'aegan'], ## rest of architectures can be added here
                         help='Network architecture to train')
     
     # Data parameters
@@ -347,6 +377,14 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.0002,
                         help='Learning rate')
     
+    # Loss hyperparameters
+    parser.add_argument('--lambda_kl', type=float, default=1e-5,
+                        help='KL divergence weight for VAE')
+    parser.add_argument('--lambda_gan', type=float, default=1.0,
+                        help='GAN loss weight for AEGAN')
+    parser.add_argument('--lambda_identity', type=float, default=5.0,
+                        help='Identity loss weight for AEGAN')
+    
     
     # Checkpointing and output
     parser.add_argument('--output_dir', type=str, default='output',
@@ -366,4 +404,6 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
+
+    #### START TRAINING ####
     main(args)

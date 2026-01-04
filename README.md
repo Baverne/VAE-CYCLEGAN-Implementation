@@ -8,11 +8,11 @@
 | 0.1 | Download the [paper](https://openreview.net/pdf?id=fu0NN8GRQ7) |✅|
 | 0.2 | Determine Networks Architectures | ✅ |
 | 1 | **Implement Networks** | |
-| 1.1 | AE (Autoencoder) | ⬜ |
-| 1.2 | AE - GAN (Generative Adversarial Network) | ⬜ |
+| 1.1 | AE (Autoencoder) | ✅ |
+| 1.2 | AE - GAN (Generative Adversarial Network) | ✅ |
 | 1.3 | Cycle - AE | ⬜ |
 | 1.4 | AE - CycleGAN | ⬜ |
-| 1.5 | VAE (Variational Autoencoder) | ⬜ |
+| 1.5 | VAE (Variational Autoencoder) | ✅ |
 | 1.6 | VAE-GAN | ⬜ |
 | 1.7 | Cycle - VAE | ⬜ |
 | 1.8 | VAE-CycleGAN | ⬜ |
@@ -61,46 +61,26 @@ python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_mod
    pip install -r requirements.txt
    ```
 
-### Dataset Source
 
-The Hypersim Dataset is publicly available at: https://github.com/apple/ml-hypersim
-
-### Citation
-
-If you use the Hypersim Dataset in your research, please cite the following paper:
-
-```bibtex
-@inproceedings{roberts:2021,
-    author    = {Mike Roberts AND Jason Ramapuram AND Anurag Ranjan AND Atulit Kumar AND
-                 Miguel Angel Bautista AND Nathan Paczan AND Russ Webb AND Joshua M. Susskind},
-    title     = {{Hypersim}: {A} Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding},
-    booktitle = {International Conference on Computer Vision (ICCV) 2021},
-    year      = {2021}
-}
-```
-
-### License
-
-The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).
 
 ## Training
 
 
 ### Training the Auto-Encoder
 
-The training script supports multiple network architectures. For now, it only features the Auto-Encoder:
+The training script supports multiple network architectures. For now, it only features the Auto-Encoder (ae) and Variational Auto-Encoder (vae) and AE-GAN (aegan).
 
 **Basic usage:**
 ```powershell
 python train.py --architecture ae --source_modality depth --target_modality depth --epochs 10 --save_freq 5 --log_image_freq 2
 ```
 
-**Training options:**
+**Main Training options:**
 
 - `--architecture`: Choose the network architecture (`ae`, `vae`,`vae_gan`, etc.)
 - `--source_modality`: Input modality (e.g., `depth`, `normal`, `semantic`, `color`)
 - `--target_modality`: Target modality (e.g., `normal`, `depth`, `semantic`, `color`)
-- `--data_dir`: Path to the dataset directory (default: `datasets`)
+- `--data_dir`: Path to the dataset directory (default: `dataset`)
 - `--batch_size`: Batch size for training (default: `4`)
 - `--epochs`: Number of training epochs (default: `100`)
 - `--lr`: Learning rate (default: `0.0002`)
@@ -140,3 +120,25 @@ output/
     best_model.pth           # Best model based on validation loss
     tensorboard/             # TensorBoard logs
 ```
+
+## Aknowledgements
+
+### Dataset Source
+
+The Hypersim Dataset is publicly available at: https://github.com/apple/ml-hypersim
+
+### Citation
+
+```bibtex
+@inproceedings{roberts:2021,
+    author    = {Mike Roberts AND Jason Ramapuram AND Anurag Ranjan AND Atulit Kumar AND
+                 Miguel Angel Bautista AND Nathan Paczan AND Russ Webb AND Joshua M. Susskind},
+    title     = {{Hypersim}: {A} Photorealistic Synthetic Dataset for Holistic Indoor Scene Understanding},
+    booktitle = {International Conference on Computer Vision (ICCV) 2021},
+    year      = {2021}
+}
+```
+
+### Licenses
+
+The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).

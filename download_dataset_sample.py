@@ -228,6 +228,7 @@ def plan_download(num_images, seed=42, repo_path=None):
     df = df[df['included_in_public_release'] == True]
     print("Dataframe des métadonnées filtrées:")
     print(df)
+
     
     # Obtenir toutes les scènes uniques
     scenes = df['scene_name'].unique()
@@ -275,9 +276,10 @@ def download_and_convert(session, url, scene_name, camera_name, frame_id, modali
     
     scene_name_with_type = get_scene_name_with_type(scene_name, scene_types)
     
-    # Créer le répertoire de sortie
+    # Créer le répertoire de sortie qi il n'existe pas
     output_scene_dir = output_dir / scene_name_with_type / camera_name
-    output_scene_dir.mkdir(parents=True, exist_ok=True)
+    if not output_scene_dir.exists():
+        output_scene_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"\n📥 Téléchargement: {scene_name_with_type}/{camera_name}/frame_{frame_id:04d}")
     

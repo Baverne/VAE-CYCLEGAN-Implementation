@@ -1,12 +1,16 @@
 """
 Loss functions for VAE-CycleGAN implementation
+
+It defines the atomic loss functions and composite loss functions for different architectures.
+
+It originally was meant to include the composite loss functions as well, but they are planned to be removed and implemented directly in the network classes.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+### ATOMIC LOSS FUNCTIONS ###
 class TranslationLoss(nn.Module):
     """
     Translation Loss (L1 reconstruction)
@@ -48,7 +52,6 @@ class IdentityLoss(nn.Module):
         loss_G = self.l1_loss(Gx, x)  # ||G(x) - x||_1
         loss_F = self.l1_loss(Fy, y)  # ||F(y) - y||_1
         return loss_G + loss_F
-
 
 class GANLossGenerator(nn.Module):
     """
@@ -100,30 +103,7 @@ class KLDivergenceLoss(nn.Module):
         # Normalize by batch size and dimensions
         return kl_loss / (mu.size(0) * mu.numel() / mu.size(0))
 
-
-class AELoss(nn.Module):
-    """
-    Loss for AE (paired)
-    L = L_trans
-    """
-    def __init__(self):
-        super(AELoss, self).__init__()
-        self.translation_loss = TranslationLoss()
-    
-    def forward(self, model_output, x, y):
-        Gx = model_output
-        
-        loss_trans = self.translation_loss(Gx, y)
-        
-        total_loss = loss_trans
-        
-        losses_dict = {
-            'loss_total': total_loss.item(),
-            'loss_trans': loss_trans.item()
-        }
-        
-        return total_loss, losses_dict
-
+### COMPOSITE LOSS FUNCTIONS (Soon removed to be implemented in the networks themselves)###
 
 class CycleAELossPaired(nn.Module):
     """
@@ -151,68 +131,6 @@ class CycleAELossPaired(nn.Module):
         }
         
         return total_loss, losses_dict
-
-
-class AEGANLoss(nn.Module):
-    """
-    Loss for AE-GAN (paired)
-    L = L_trans + λ_GAN * L_GAN + λ_identity * L_id
-    """
-    def __init__(self, lambda_gan=1.0, lambda_identity=5.0):
-        super(AEGANLoss, self).__init__()
-        self.translation_loss = TranslationLoss()
-        self.gan_loss_gen = GANLossGenerator()
-        self.identity_loss = IdentityLoss()
-        self.lambda_gan = lambda_gan
-        self.lambda_identity = lambda_identity
-    
-    def forward(self, model_output, x, y):
-        Gx, DGx, Dx = model_output
-        
-        loss_trans = self.translation_loss(Gx, y)
-        loss_gan = self.gan_loss_gen(Dx, DGx)
-        # For identity loss, we need G(x) and F(y), but in single generator case:
-        loss_id = self.identity_loss(x, y, Gx, y)  # Simplified - may need adjustment
-        
-        total_loss = loss_trans + self.lambda_gan * loss_gan + self.lambda_identity * loss_id
-        
-        losses_dict = {
-            'loss_total': total_loss.item(),
-            'loss_trans': loss_trans.item(),
-            'loss_gan': loss_gan.item(),
-            'loss_identity': loss_id.item()
-        }
-        
-        return total_loss, losses_dict
-
-
-class VAELoss(nn.Module):
-    """
-    Loss for VAE (paired)
-    L = L_trans + λ_kl * L_KL
-    """
-    def __init__(self, lambda_kl=1e-5):
-        super(VAELoss, self).__init__()
-        self.translation_loss = TranslationLoss()
-        self.kl_loss = KLDivergenceLoss()
-        self.lambda_kl = lambda_kl
-    
-    def forward(self, model_output, x, y):
-        Gx, mu, logvar = model_output
-        
-        loss_trans = self.translation_loss(Gx, y)
-        loss_kl = self.kl_loss(mu, logvar)
-        
-        total_loss = loss_trans + self.lambda_kl * loss_kl
-        
-        losses_dict = {
-            'loss_total': total_loss.item(),
-            'loss_trans': loss_trans.item(),
-            'loss_kl': loss_kl.item()
-        }
-        
-        return total_loss, losses_dict
-
 
 class CycleVAELossPaired(nn.Module):
     """
@@ -318,4 +236,3 @@ class VAECycleGANLoss(nn.Module):
     Loss for VAE-CycleGAN (unpaired)
     L = λ_GAN * L_GAN + λ_identity * L_id + λ_cycle * L_cycle + λ_kl * L_KL
     """
-

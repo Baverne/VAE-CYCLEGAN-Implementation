@@ -12,6 +12,9 @@ dataset/
 dataset_/
 my_dataset/
 
+# Code construction artifacts
+test.ipynb
+
 # C extensions
 *.so
 

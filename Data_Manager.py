@@ -39,13 +39,20 @@ class HypersimDataset(Dataset):
         modalities: List[str] = ['color','depth','normal_world','normal','semantic','semantic_instance','normal'],
         transform: Optional[Callable] = None,
         color_transform: Optional[Callable] = None,
-        return_scene_info: bool = True
+        return_scene_info: bool = True,
+        paired_mode: bool = True # in this mode, x and y are returned as 'x' and 'y' keys
     ):
         self.root_dir = Path(root_dir)
         self.modalities = modalities
         self.transform = transform
         self.color_transform = color_transform
         self.return_scene_info = return_scene_info
+        self.paired_mode = paired_mode
+        
+        # Check paired_mode requirements
+        if self.paired_mode:
+            if len(self.modalities) not in [1, 2]:
+                raise ValueError(f"paired_mode requires 1 or 2 modalities, got {len(self.modalities)}")
         
         # Scan dataset and build file index
         self.samples = self._scan_dataset()
@@ -204,6 +211,28 @@ class HypersimDataset(Dataset):
         
         # Add frame identifier
         result['frame_id'] = sample_info['frame_id']
+        
+        # Apply paired_mode
+        if self.paired_mode:
+            paired_result = {}
+            if len(self.modalities) == 1:
+                # Single modality: x = y (autoencoder mode)
+                modality = self.modalities[0]
+                paired_result['x'] = result[modality]
+                paired_result['y'] = result[modality]
+            elif len(self.modalities) == 2:
+                # Two modalities: x = first (input), y = second (target)
+                paired_result['x'] = result[self.modalities[0]]
+                paired_result['y'] = result[self.modalities[1]]
+            
+            # Keep scene info if requested
+            if self.return_scene_info:
+                paired_result['scene_num'] = result['scene_num']
+                paired_result['scene_type'] = result['scene_type']
+                paired_result['cam_num'] = result['cam_num']
+            paired_result['frame_id'] = result['frame_id']
+            
+            return paired_result
         
         return result
     
