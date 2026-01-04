@@ -9,6 +9,7 @@ __pycache__/
 #data
 datasets/
 dataset/
+dataset_/
 my_dataset/
 
 # C extensions

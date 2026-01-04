@@ -36,17 +36,6 @@ zipfile.ZipExtFile.MIN_READ_SIZE = 2 ** 20
 
 # Base URL et liste des scènes disponibles
 BASE_URL = "https://docs-assets.developer.apple.com/ml-research/datasets/hypersim/v1/scenes/"
-SCENE_NAMES = [
-    "ai_001_001", "ai_001_002", "ai_001_003", "ai_001_004", "ai_001_005",
-    "ai_001_006", "ai_001_007", "ai_001_008", "ai_001_009", "ai_001_010",
-    "ai_002_001", "ai_002_002", "ai_002_003", "ai_002_004", "ai_002_005",
-    "ai_002_006", "ai_002_007", "ai_002_008", "ai_002_009", "ai_002_010",
-    "ai_003_001", "ai_003_002", "ai_003_004", "ai_003_005", "ai_003_006",
-    "ai_003_007", "ai_003_008", "ai_003_009", "ai_003_010",
-]
-
-# Construction des URLs complètes
-URLS = [f"{BASE_URL}{scene}.zip" for scene in SCENE_NAMES]
 
 # Définition des modalités disponibles
 # Format: (nom_modalité, nom_fichier_source, is_hdf5, répertoire_source)
@@ -230,19 +219,15 @@ def plan_download(num_images, seed=42, repo_path=None):
         metadata_path = Path(repo_path) / 'evermotion_dataset' / 'analysis' / 'metadata_images.csv'
     
     if not metadata_path.exists():
-        print(f"⚠️  Métadonnées non trouvées, utilisation d'un plan par défaut")
-        # Plan par défaut basé sur les URLs disponibles
-        scenes = [url.split('/')[-1].replace('.zip', '') for url in URLS[:20]]
-        plan = []
-        for i in range(num_images):
-            scene_idx = i % len(scenes)
-            plan.append((scenes[scene_idx], 'cam_00', i % 100))
-        return plan
-    
+        raise FileNotFoundError(f"⚠️  Métadonnées non trouvées, utilisation d'un plan par défaut")
+    print(f"metadata_path : {metadata_path}")
     df = pd.read_csv(metadata_path)
-    
+    print("Dataframe des métadonnées non filtrées:")
+    print(df)
     # Ne garder que les images publiquement disponibles
     df = df[df['included_in_public_release'] == True]
+    print("Dataframe des métadonnées filtrées:")
+    print(df)
     
     # Obtenir toutes les scènes uniques
     scenes = df['scene_name'].unique()
@@ -323,6 +308,12 @@ def download_and_convert(session, url, scene_name, camera_name, frame_id, modali
                 
                 output_filename = f"frame_{frame_id:04d}_{mapping['output_name']}"
                 output_path = output_scene_dir / output_filename
+                
+                # Vérifier si le fichier existe déjà
+                if output_path.exists():
+                    print(f"  ⏭️  {modality}: déjà téléchargé")
+                    downloaded_count += 1
+                    continue
                 
                 if mapping['is_hdf5']:
                     # Extraire temporairement le HDF5
@@ -427,7 +418,8 @@ Exemples:
     print(f"\n📋 Planification des téléchargements...")
     plan = plan_download(args.num_images, seed=args.seed, repo_path=args.repo_path)
     print(f"  Images planifiées: {len(plan)}")
-    
+    print("plan :")
+    print(plan)
     # Grouper par scène pour optimiser les téléchargements
     scenes_to_download = defaultdict(list)
     for scene_name, camera_name, frame_id in plan:
@@ -444,16 +436,7 @@ Exemples:
     
     for scene_name, frames in scenes_to_download.items():
         # Trouver l'URL correspondante
-        url = None
-        for u in URLS:
-            if scene_name in u:
-                url = u
-                break
-        
-        if url is None:
-            print(f"\n⚠️  URL non trouvée pour {scene_name}, scène ignorée")
-            total_failed += len(frames)
-            continue
+        url = f"{BASE_URL}{scene_name}.zip"
         
         # Télécharger toutes les frames de cette scène
         for camera_name, frame_id in frames:
