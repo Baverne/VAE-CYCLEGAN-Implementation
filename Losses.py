@@ -103,7 +103,8 @@ class KLDivergenceLoss(nn.Module):
         # Normalize by batch size and dimensions
         return kl_loss / (mu.size(0) * mu.numel() / mu.size(0))
 
-### COMPOSITE LOSS FUNCTIONS (Soon removed to be implemented in the networks themselves)###
+### COMPOSITE LOSS FUNCTIONS ###
+# TODO: (Soon removed to be implemented in the networks themselves)
 
 class CycleAELossPaired(nn.Module):
     """

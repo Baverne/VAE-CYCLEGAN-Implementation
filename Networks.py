@@ -49,7 +49,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 import torch.nn as nn
-from losses import *
+from Losses import *
 
 ### ATOMIC NETWORK COMPONENTS ###
 
@@ -173,7 +173,8 @@ class VariationalEncoderBlock (nn.Module):
         eps = torch.randn_like(std)
         z = mu + eps * std
         return z, mu, logvar
-    
+
+
 class VariationalDecoderBlock (nn.Module):
     def __init__(self, latent_dim=64, out_channels=1024):
         super(VariationalDecoderBlock, self).__init__()
@@ -182,7 +183,8 @@ class VariationalDecoderBlock (nn.Module):
     def forward(self, z):
         x_recon = self.conv(z)
         return x_recon
-    
+
+
 class Decoder (nn.Module):
     def __init__(self):
         super(Decoder, self).__init__()
@@ -197,7 +199,8 @@ class Decoder (nn.Module):
 
     def forward(self, x):
         return self.model(x)
-    
+
+
 class Discriminator (nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
@@ -206,13 +209,15 @@ class Discriminator (nn.Module):
         layers.append(CaSb(64, 128, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(128, 256, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(256, 512, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
-        layers.append(nn.Conv2d(512, 1, kernel_size=16, stride=1, padding=0))
+        layers.append(nn.Conv2d(512, 1, kernel_size=16, stride=1, padding=0))  # On your figure you put 2 as output channels whereas here it's 1 ?
         
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):
         #shape (B, 1, 1, 1) to (B,1)
-        return self.model(x).view(-1, 1).squeeze(1)
+        return self.model(x).view(-1, 1).squeeze(1) # Then we should not squeeze and have shape (B x 1 x 1 x 2) ?
+    # i guess we can skeeze to have (B x 2) for real/fake classification but also keep 1 channel that will be 0 for fake and 1 for real ?
+    # Don't know what's the best option 
     
 ### NETWORKS COMPOSITES ###
     
@@ -230,7 +235,7 @@ class Autoencoder (nn.Module):
     def forward(self, x):
         z = self.encoder(x)
         Gx = self.decoder(z)
-        return Gx # All Netework expect Gx as their first output
+        return Gx # All Network expect Gx as their first output
     
     def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
         """Configure optimizer for training"""
@@ -239,10 +244,14 @@ class Autoencoder (nn.Module):
     
     def save_optimizer_states(self):
         """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
         return {'optimizer': self.optimizer.state_dict()}
     
     def load_optimizer_states(self, states):
         """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
         if 'optimizer' in states:
             self.optimizer.load_state_dict(states['optimizer'])
         else :
@@ -260,6 +269,11 @@ class Autoencoder (nn.Module):
         Returns:
             dict with loss metrics
         """
+        if self.loss_fn is None:
+            raise ValueError("Loss function has not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+
         x = batch['x']
         y = batch['y']
         
@@ -287,6 +301,9 @@ class Autoencoder (nn.Module):
         Returns:
             dict with loss metrics and output
         """
+        if self.loss_fn is None:
+            raise ValueError("Loss function has not been configured yet.")
+
         x = batch['x']
         y = batch['y']
         
@@ -302,6 +319,7 @@ class Autoencoder (nn.Module):
             'loss_trans': loss_trans.item(),
             'output': output
         }
+
 
 class VariationalAutoencoder (nn.Module):
     def __init__(self, latent_dim=64):
@@ -332,10 +350,14 @@ class VariationalAutoencoder (nn.Module):
     
     def save_optimizer_states(self):
         """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
         return {'optimizer': self.optimizer.state_dict()}
     
     def load_optimizer_states(self, states):
         """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
         if 'optimizer' in states:
             self.optimizer.load_state_dict(states['optimizer'])
         else :
@@ -355,6 +377,12 @@ class VariationalAutoencoder (nn.Module):
         Returns:
             dict with loss metrics
         """
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if self.loss_trans_fn is None:
+            raise ValueError("Translation loss function has not been configured yet.")
+        if self.loss_kl_fn is None:
+            raise ValueError("KL divergence loss function has not been configured yet.")
         x = batch['x']
         y = batch['y']
         
@@ -386,6 +414,12 @@ class VariationalAutoencoder (nn.Module):
         Returns:
             dict with loss metrics and output
         """
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if self.loss_trans_fn is None:
+            raise ValueError("Translation loss function has not been configured yet.")
+        if self.loss_kl_fn is None:
+            raise ValueError("KL divergence loss function has not been configured yet.")
         x = batch['x']
         y = batch['y']
         
@@ -423,6 +457,7 @@ class AEGAN (nn.Module):
         self.loss_identity_fn = None
         self.lambda_gan = 0
         self.lambda_identity = 0
+
     def forward(self, x):
         Gx= self.G(x)
         DGx = self.D(Gx)
@@ -437,6 +472,8 @@ class AEGAN (nn.Module):
     
     def save_optimizer_states(self):
         """Save optimizer states for checkpointing"""
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
         return {
             'optimizer_G': self.optimizer_G.state_dict(),
             'optimizer_D': self.optimizer_D.state_dict()
@@ -444,6 +481,8 @@ class AEGAN (nn.Module):
     
     def load_optimizer_states(self, states):
         """Load optimizer states from checkpoint"""
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
         if 'optimizer_G' in states:
             self.optimizer_G.load_state_dict(states['optimizer_G'])
         else :
@@ -471,6 +510,17 @@ class AEGAN (nn.Module):
         Returns:
             dict with loss metrics
         """
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+        if self.loss_trans_fn is None:
+            raise ValueError("Translation loss function has not been configured yet.")
+        if self.loss_gan_gen_fn is None:
+            raise ValueError("GAN generator loss function has not been configured yet.")
+        if self.loss_gan_disc_fn is None:
+            raise ValueError("GAN discriminator loss function has not been configured yet.")
+        if self.loss_identity_fn is None:
+            raise ValueError("Identity loss function has not been configured yet.")
+        
         x = batch['x']
         y = batch['y']
         
@@ -518,6 +568,17 @@ class AEGAN (nn.Module):
         Returns:
             dict with loss metrics and output
         """
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+        if self.loss_trans_fn is None:
+            raise ValueError("Translation loss function has not been configured yet.")
+        if self.loss_gan_gen_fn is None:
+            raise ValueError("GAN generator loss function has not been configured yet.")
+        if self.loss_gan_disc_fn is None:
+            raise ValueError("GAN discriminator loss function has not been configured yet.")
+        if self.loss_identity_fn is None:
+            raise ValueError("Identity loss function has not been configured yet.")
+
         x = batch['x']
         y = batch['y']
         
@@ -543,6 +604,7 @@ class AEGAN (nn.Module):
 
 
 class VAEGAN (nn.Module):
+
     def __init__(self, latent_dim=64):
         super(VAEGAN, self).__init__()
         self.G = VariationalAutoencoder(latent_dim)
@@ -560,18 +622,21 @@ class CycleAE (nn.Module):
         super(CycleAE, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
+    
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
         Fy = self.F(y)
         GFy = self.G(Fy)
         return Gx, FGx, Fy, GFy # All Netework expect Gx as their first output
-    
+
+
 class CycleVAE (nn.Module):
     def __init__(self, latent_dim=64):
         super(CycleVAE, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
+    
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -579,13 +644,15 @@ class CycleVAE (nn.Module):
         GFy, mu_GFy, logvar_GFy = self.G(Fy)
         return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy # All Netework expect Gx as their first output
 
+
 class CycleAEGAN (nn.Module):
     def __init__(self):
-        super(CycleAE, self).__init__()
+        super(CycleAEGAN, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
         self.DX = Discriminator()
         self.DY = Discriminator()
+    
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
@@ -599,12 +666,14 @@ class CycleAEGAN (nn.Module):
     
     
 class CycleVAEGAN (nn.Module):
+    
     def __init__(self, latent_dim=64):
         super(CycleVAEGAN, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
         self.DX = Discriminator()
         self.DY = Discriminator()
+    
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -618,37 +687,59 @@ class CycleVAEGAN (nn.Module):
     
 
 if __name__ == "__main__":
-    # Test the networks
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    x = torch.randn((10, 3, 256, 256)).to(device)
-    encoder = Encoder().to(device)
-    decoder = Decoder().to(device)
-    z = encoder(x)
-    print("Encoded shape:", z.shape)
-    x_recon = decoder(z)
-    print("Reconstructed shape:", x_recon.shape)
-    vae = VariationalAutoencoder(latent_dim=64).to(device)
-    x_recon, mu, logvar = vae(x)
-    print("VAE Reconstructed shape:", x_recon.shape)
-    print("VAE Mu shape:", mu.shape)
+    print("Using device:", device)
 
+    # The commented shapes are the output shapes with input of shape (10, 3, 256, 256) -> Why ? Not coherent with the figures on Github
+    x = torch.randn((10, 3, 256, 256)).to(device)
+    
+    # Test the Networks molecular components
+    encoder = Encoder().to(device)
+    encoded = encoder(x)
+    print("Encoded shape:", encoded.shape)  # Encoded shape: torch.Size([10, 1024, 16, 16])
+
+    decoder = Decoder().to(device)
+    decoded = decoder(encoded)
+    print("Decoded shape:", decoded.shape)  # Decoded shape: torch.Size([10, 3, 256, 256])
+
+    variational_encoder_block = VariationalEncoderBlock(in_channels=1024, latent_dim=64).to(device)
+    z, mu, logvar = variational_encoder_block(encoded)
+    print("Variational Encoder Block output shape:", z.shape)  # Variational Encoder Block output shape: torch.Size([10, 64, 16, 16])
+
+    variational_decoder_block = VariationalDecoderBlock(latent_dim=64, out_channels=1024).to(device)
+    decoded_latent = variational_decoder_block(z)
+    print("Variational Decoder Block output shape:", decoded_latent.shape)  # Variational Decoder Block output shape: torch.Size([10, 1024, 16, 16])
+    
     discriminator = Discriminator().to(device)
     validity = discriminator(x)
-    print("Discriminator output shape:", validity.shape)
+    print("Discriminator output shape:", validity.shape)    # Discriminator output shape: torch.Size([10]) -> see comment in Discriminator forward method
 
-    aegan = AEGAN(latent_dim=64).to(device)
+    # Test the networks composites
+    Autoencoder_instance = Autoencoder().to(device)
+    Gx = Autoencoder_instance(x)
+    print("Autoencoder output shape:", Gx.shape)  # Autoencoder output shape: torch.Size([10, 3, 256, 256])
+
+    vae = VariationalAutoencoder(latent_dim=64).to(device)
+    x_recon, mu, logvar = vae(x)
+    print("VAE Reconstructed shape:", x_recon.shape)    # VAE Reconstructed shape: torch.Size([10, 3, 256, 256])
+    print("VAE Mu shape:", mu.shape)    # VAE Mu shape: torch.Size([10, 64, 16, 16])
+
+    aegan = AEGAN().to(device) # There's no latent dim for AEGAN
     Gx, DGx, Dx = aegan(x)
-    print("AEGAN Reconstructed shape:", Gx.shape)
-    print("AEGAN Discriminator output shape:", DGx.shape)
+    print("AEGAN Reconstructed shape:", Gx.shape)    # AEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
+    print("AEGAN Discriminator output shape:", DGx.shape)    # AEGAN Discriminator output shape: torch.Size([10])
+
     vaegan = VAEGAN(latent_dim=64).to(device)
     Gx, mu, logvar,DGx, Dx, = vaegan(x)
-    print("VAEGAN Reconstructed shape:", Gx.shape)
-    print("VAEGAN Discriminator output shape:", DGx.shape)
-    cycle_ae = CycleAE().to(device)
-    y = torch.randn((10, 3, 256, 256)).to(device)
-    Gx, FGx, Fy, GFy = cycle_ae(x, y)
-    print("CycleAE Gx shape:", Gx.shape)
-    print("CycleAE FGx shape:", FGx.shape)
-    print("CycleAE Fy shape:", Fy.shape)
-    print("CycleAE GFy shape:", GFy.shape)
+    print("VAEGAN Reconstructed shape:", Gx.shape)    # VAEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
+    print("VAEGAN Discriminator output shape:", DGx.shape)    # VAEGAN Discriminator output shape: torch.Size([10]) -> see comment in Discriminator forward method
 
+    cycle_aegan = CycleAEGAN().to(device) # There's no latent dim for CycleAEGAN
+    y = torch.randn((10, 3, 256, 256)).to(device)
+    Gx, FGx, Fy, GFy, DYGx, DXFy = cycle_aegan(x, y)
+    print("CycleAE Gx shape:", Gx.shape)   # CycleAE Gx shape: torch.Size([10, 3, 256, 256])
+    print("CycleAE FGx shape:", FGx.shape)  # CycleAE FGx shape: torch.Size([10, 3, 256, 256])
+    print("CycleAE Fy shape:", Fy.shape)  # CycleAE Fy shape: torch.Size([10, 3, 256, 256])
+    print("CycleAE GFy shape:", GFy.shape) # CycleAE GFy shape: torch.Size([10, 3, 256, 256])
+
+    
