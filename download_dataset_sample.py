@@ -30,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 from collections import defaultdict
 import shutil
+from tqdm import tqdm
 
 # Augmenter la vitesse de téléchargement
 zipfile.ZipExtFile.MIN_READ_SIZE = 2 ** 20
@@ -271,7 +272,7 @@ def plan_download(num_images, seed=42, repo_path=None):
     return plan[:num_images]
 
 
-def download_and_convert(session, url, scene_name, camera_name, frame_id, modalities, output_dir, scene_types, temp_dir):
+def download_and_convert(session, url, scene_name, camera_name, frame_id, modalities, output_dir, scene_types, temp_dir, verbose=True):
     """Télécharge et convertit en png les modalités pour une image donnée."""
     
     scene_name_with_type = get_scene_name_with_type(scene_name, scene_types)
@@ -280,8 +281,8 @@ def download_and_convert(session, url, scene_name, camera_name, frame_id, modali
     output_scene_dir = output_dir / scene_name_with_type / camera_name
     if not output_scene_dir.exists():
         output_scene_dir.mkdir(parents=True, exist_ok=True)
-    
-    print(f"\n📥 Téléchargement: {scene_name_with_type}/{camera_name}/frame_{frame_id:04d}")
+    if verbose:
+        print(f"\n Téléchargement: {scene_name_with_type}/{camera_name}/frame_{frame_id:04d}")
     
     try:
         # Ouvrir le fichier ZIP distant
@@ -313,7 +314,8 @@ def download_and_convert(session, url, scene_name, camera_name, frame_id, modali
                 
                 # Vérifier si le fichier existe déjà
                 if output_path.exists():
-                    print(f"  ⏭️  {modality}: déjà téléchargé")
+                    if verbose:
+                        print(f"  ⏭️  {modality}: déjà téléchargé")
                     downloaded_count += 1
                     continue
                 
@@ -343,8 +345,8 @@ def download_and_convert(session, url, scene_name, camera_name, frame_id, modali
                         else:
                             with open(output_path, 'wb') as of:
                                 of.write(zf.read())
-                
-                print(f"  ✓ {modality}: {output_filename}")
+                if verbose:
+                    print(f"  ✓ {modality}: {output_filename}")
                 downloaded_count += 1
                 
             except Exception as e:
@@ -420,8 +422,10 @@ Exemples:
     print(f"\n📋 Planification des téléchargements...")
     plan = plan_download(args.num_images, seed=args.seed, repo_path=args.repo_path)
     print(f"  Images planifiées: {len(plan)}")
-    print("plan :")
-    print(plan)
+    
+    if len(plan) < 20:
+        print("plan :")
+        print(plan)
     # Grouper par scène pour optimiser les téléchargements
     scenes_to_download = defaultdict(list)
     for scene_name, camera_name, frame_id in plan:
@@ -436,20 +440,23 @@ Exemples:
     total_downloaded = 0
     total_failed = 0
     
-    for scene_name, frames in scenes_to_download.items():
-        # Trouver l'URL correspondante
-        url = f"{BASE_URL}{scene_name}.zip"
-        
-        # Télécharger toutes les frames de cette scène
-        for camera_name, frame_id in frames:
-            success = download_and_convert(
-                session, url, scene_name, camera_name, frame_id,
-                modalities, output_dir, scene_types, temp_dir
-            )
-            if success:
-                total_downloaded += 1
-            else:
-                total_failed += 1
+    total_frames = sum(len(frames) for frames in scenes_to_download.values())
+    with tqdm(total=total_frames, desc="Téléchargement des images") as pbar:
+        for scene_name, frames in scenes_to_download.items():
+            # Trouver l'URL correspondante
+            url = f"{BASE_URL}{scene_name}.zip"
+            
+            # Télécharger toutes les frames de cette scène
+            for camera_name, frame_id in frames:
+                success = download_and_convert(
+                    session, url, scene_name, camera_name, frame_id,
+                    modalities, output_dir, scene_types, temp_dir, verbose=False
+                )
+                if success:
+                    total_downloaded += 1
+                else:
+                    total_failed += 1
+                pbar.update(1)
     
     # Nettoyer le répertoire temporaire
     if temp_dir.exists():
