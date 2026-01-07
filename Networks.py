@@ -304,21 +304,22 @@ class Autoencoder (nn.Module):
         if self.loss_fn is None:
             raise ValueError("Loss function has not been configured yet.")
 
-        x = batch['x']
-        y = batch['y']
-        
-        # Forward pass
-        output = self(x)
-        
-        # Compute loss
-        loss_trans = self.loss_fn(output, y)
-        
-        # Return metrics
-        return {
-            'total_loss': loss_trans.item(),
-            'loss_trans': loss_trans.item(),
-            'output': output
-        }
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+            
+            # Forward pass
+            output = self(x)
+            
+            # Compute loss
+            loss_trans = self.loss_fn(output, y)
+            
+            # Return metrics
+            return {
+                'total_loss': loss_trans.item(),
+                'loss_trans': loss_trans.item(),
+                'output': output
+            }
 
 
 class VariationalAutoencoder (nn.Module):
@@ -420,25 +421,27 @@ class VariationalAutoencoder (nn.Module):
             raise ValueError("Translation loss function has not been configured yet.")
         if self.loss_kl_fn is None:
             raise ValueError("KL divergence loss function has not been configured yet.")
-        x = batch['x']
-        y = batch['y']
         
-        # Forward pass
-        output, mu, logvar = self(x)
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+            
+            # Forward pass
+            output, mu, logvar = self(x)
+            
+            # Compute losses
+            loss_trans = self.loss_trans_fn(output, y)
+            loss_kl = self.loss_kl_fn(mu, logvar)
+            total_loss = loss_trans + self.lambda_kl * loss_kl
+            
+            # Return metrics
+            return {
+                'G_loss': total_loss.item(),
+                'loss_trans': loss_trans.item(),
+                'loss_kl': loss_kl.item(),
+                'output': output
+            }
         
-        # Compute losses
-        loss_trans = self.loss_trans_fn(output, y)
-        loss_kl = self.loss_kl_fn(mu, logvar)
-        total_loss = loss_trans + self.lambda_kl * loss_kl
-        
-        # Return metrics
-        return {
-            'G_loss': total_loss.item(),
-            'loss_trans': loss_trans.item(),
-            'loss_kl': loss_kl.item(),
-            'output': output
-        }
-    
 
     
 class AEGAN (nn.Module):
@@ -579,28 +582,29 @@ class AEGAN (nn.Module):
         if self.loss_identity_fn is None:
             raise ValueError("Identity loss function has not been configured yet.")
 
-        x = batch['x']
-        y = batch['y']
-        
-        # Forward pass
-        Gx, DGx, Dx = self(x)
-        
-        # Compute losses
-        loss_trans = self.loss_trans_fn(Gx, y)
-        loss_gan_g = self.loss_gan_gen_fn(Dx, DGx)
-        loss_id = self.loss_identity_fn(x, y, Gx, y)
-        G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-        D_loss = self.loss_gan_disc_fn(Dx, DGx)
-        
-        # Return metrics
-        return {
-            'total_loss': (G_loss.item() + D_loss.item()),
-            'G_loss': G_loss.item(),
-            'D_loss': D_loss.item(),
-            'loss_trans': loss_trans.item(),
-            'loss_gan_g': loss_gan_g.item(),
-            'loss_identity': loss_id.item(),
-        }
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+            
+            # Forward pass
+            Gx, DGx, Dx = self(x)
+            
+            # Compute losses
+            loss_trans = self.loss_trans_fn(Gx, y)
+            loss_gan_g = self.loss_gan_gen_fn(Dx, DGx)
+            loss_id = self.loss_identity_fn(x, y, Gx, y)
+            G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
+            D_loss = self.loss_gan_disc_fn(Dx, DGx)
+            
+            # Return metrics
+            return {
+                'total_loss': (G_loss.item() + D_loss.item()),
+                'G_loss': G_loss.item(),
+                'D_loss': D_loss.item(),
+                'loss_trans': loss_trans.item(),
+                'loss_gan_g': loss_gan_g.item(),
+                'loss_identity': loss_id.item(),
+            }
 
 
 class VAEGAN (nn.Module):
@@ -612,10 +616,139 @@ class VAEGAN (nn.Module):
         self.latent_dim = latent_dim
 
     def forward(self, x):
-        Gx, mu, logvar = self.G(x)
-        DGx = self.D(Gx)
-        Dx = self.D(x)
+        Gx, mu, logvar = self.G(x)  # output of the VAE
+        DGx = self.D(Gx)  # Discriminator output for generated data
+        Dx = self.D(x)  # Discriminator output for real data
         return Gx, mu, logvar, DGx, Dx # All Netework expect Gx as their first output
+    
+    def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
+        """Configure optimizers for Generator and Discriminator"""
+        self.optimizer_G = torch.optim.Adam(self.G.parameters(), lr=lr, betas=betas)
+        self.optimizer_D = torch.optim.Adam(self.D.parameters(), lr=lr, betas=betas)
+        return self.optimizer_G, self.optimizer_D
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+        return {
+            'optimizer_G': self.optimizer_G.state_dict(),
+            'optimizer_D': self.optimizer_D.state_dict()
+        }
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+        if 'optimizer_G' in states:
+            self.optimizer_G.load_state_dict(states['optimizer_G'])
+        else :
+            raise KeyError("optimizer_G state not found in states")
+        if 'optimizer_D' in states:
+            self.optimizer_D.load_state_dict(states['optimizer_D'])
+        else :
+            raise KeyError("optimizer_D state not found in states")
+    
+    def configure_loss(self, **kwargs):
+        """Configure loss functions"""
+        self.translation_loss = TranslationLoss()
+        self.gan_loss_gen = GANLossGenerator()
+        self.gan_loss_disc = GANLossDiscriminator()
+        self.identity_loss = IdentityLoss()
+        self.kl_loss = KLDivergenceLoss()
+        self.lambda_gan = kwargs.get('lambda_gan', 1.0)
+        self.lambda_identity = kwargs.get('lambda_identity', 5.0)
+        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+    
+    def training_step(self, batch):
+        """
+        Training step for VAE-GAN (trains both G and D)
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics
+        """
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+
+        x = batch['x']
+        y = batch['y']
+        
+        ### Train Generator
+        self.optimizer_G.zero_grad()
+        
+        # Forward pass
+        Gx, mu, logvar, DGx, Dx = self(x)
+        
+        # Generator losses
+        loss_trans = self.translation_loss(Gx, y)
+        loss_gan = self.gan_loss_gen(Dx, DGx)
+        loss_id = self.identity_loss(x, y, Gx, y)  # Simplified identity
+        loss_kl = self.kl_loss(mu, logvar)
+        G_loss = (loss_trans + self.lambda_gan * loss_gan +
+                   self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
+        
+        # Backward and optimize
+        G_loss.backward(retain_graph=True)  # retain_graph to reuse for D
+        self.optimizer_G.step()
+
+        ### Train Discriminator
+        self.optimizer_D.zero_grad()
+        
+        # Discriminator loss (reuse forward outputs)
+        D_loss = self.gan_loss_disc(Dx, DGx.detach())
+        
+        # Backward and optimize
+        D_loss.backward()
+        self.optimizer_D.step()
+
+        # Return metrics
+        return {
+            'G_loss': G_loss.item(),
+            'D_loss': D_loss.item(),
+            'loss_trans': loss_trans.item(),
+            'loss_gan': loss_gan.item(),
+            'loss_identity': loss_id.item(),
+            'loss_kl': loss_kl.item()
+        }
+
+    def validation_step(self, batch):
+        """
+        Validation step for VAE-GAN
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.optimizer_G is None or self.optimizer_D is None:
+            raise ValueError("Optimizers have not been configured yet.")
+
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+            
+            # Forward pass
+            Gx, mu, logvar, DGx, Dx = self(x)
+            
+            # Compute losses
+            loss_trans = self.translation_loss(Gx, y)
+            loss_gan = self.gan_loss_gen(Dx, DGx)
+            loss_id = self.identity_loss(x, y, Gx, y)
+            loss_kl = self.kl_loss(mu, logvar)
+            G_loss = (loss_trans + self.lambda_gan * loss_gan +
+                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
+            D_loss = self.gan_loss_disc(Dx, DGx)
+            # Return metrics
+            return {
+                'total_loss': (G_loss.item() + D_loss.item()),
+                'G_loss': G_loss.item(),
+                'D_loss': D_loss.item(),
+                'loss_trans': loss_trans.item(),
+                'loss_gan': loss_gan.item(),
+                'loss_identity': loss_id.item(),
+                'loss_kl': loss_kl.item(),
+            }
+
 
 class CycleAE (nn.Module):
     def __init__(self):
@@ -629,6 +762,95 @@ class CycleAE (nn.Module):
         Fy = self.F(y)
         GFy = self.G(Fy)
         return Gx, FGx, Fy, GFy # All Netework expect Gx as their first output
+    
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else :
+            raise KeyError("optimizer state not found in states")
+    
+    def configure_loss(self, **kwargs):
+        """Configure loss functions (ignores unused kwargs)"""
+        self.loss_cycle = CycleConsistencyLoss()
+        self.loss_trans = TranslationLoss()
+
+    def training_step(self, batch):
+        """
+        Training step for CycleAE
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics
+        """
+        if self.loss_cycle is None or self.loss_trans is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        x = batch['x']
+        y = batch['y']
+
+        # Forward pass
+        Gx, FGx, Fy, GFy = self(x, y)
+
+        # Compute losses
+        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+        total_loss = loss_cycle + loss_trans
+        
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Return metrics
+        return {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_trans': loss_trans.item(),
+        }
+    
+    def validation_step(self, batch):
+        """
+        Validation step for CycleAE
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.loss_cycle is None or self.loss_trans is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, FGx, Fy, GFy = self(x, y)
+
+            # Compute losses
+            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+            total_loss = loss_cycle + loss_trans
+
+            # Return metrics
+            return {
+                'total_loss': total_loss.item(),
+                'loss_cycle': loss_cycle.item(),
+                'loss_trans': loss_trans.item(),
+            }
 
 
 class CycleVAE (nn.Module):
@@ -644,6 +866,72 @@ class CycleVAE (nn.Module):
         GFy, mu_GFy, logvar_GFy = self.G(Fy)
         return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy # All Netework expect Gx as their first output
 
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else :
+            raise KeyError("optimizer state not found in states")
+    
+    def configure_loss(self, **kwargs):
+        """Configure loss functions"""
+        self.loss_cycle = CycleConsistencyLoss()
+        self.loss_trans = TranslationLoss()
+        self.loss_kl = KLDivergenceLoss()
+        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+    
+    def training_step(self, batch):
+        """
+        Training step for CycleVAE
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics
+        """
+        if self.loss_cycle is None or self.loss_trans is None or self.loss_kl is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        
+        x = batch['x']
+        y = batch['y']
+
+        # Forward pass
+        Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
+        # Compute losses
+        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+        loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
+                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
+        # Do we need to compute the kl loss over 4 terms ? or just 2 (G and F) ?
+
+        total_loss = loss_cycle + loss_trans + self.lambda_kl * loss_kl
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Return metrics
+        return {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_trans': loss_trans.item(),
+            'loss_kl': loss_kl.item(),
+        }
 
 class CycleAEGAN (nn.Module):
     def __init__(self):
@@ -663,6 +951,115 @@ class CycleAEGAN (nn.Module):
         DXx = self.DX(x)
         DYy = self.DY(y)
         return Gx, FGx, Fy, GFy, DYGx, DXFy # All Netework expect Gx as their first output
+    
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else :
+            raise KeyError("optimizer state not found in states")
+    
+    def configure_loss(self, **kwargs):
+        """Configure loss functions (ignores unused kwargs)"""
+        self.loss_cycle = CycleConsistencyLoss()
+        self.loss_gan_gen = GANLossGenerator()
+        self.loss_gan_disc = GANLossDiscriminator()
+        self.loss_identity = IdentityLoss()
+        self.lambda_gan = kwargs.get('lambda_gan', 1.0)
+        self.lambda_identity = kwargs.get('lambda_identity', 5.0)
+        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
+    
+    def training_step(self, batch):
+        """
+        Training step for CycleAEGAN
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics
+        """
+        if (self.loss_cycle is None or self.loss_gan_gen is None or
+            self.loss_gan_disc is None or self.loss_identity is None):
+            raise ValueError("Loss functions have not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        
+        x = batch['x']
+        y = batch['y']
+
+        # Forward pass
+        Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
+
+        # Compute losses
+        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
+                      self.loss_gan_gen(self.DY(y), DYGx))
+        loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
+        
+        total_loss = (self.lambda_cycle * loss_cycle +
+                      self.lambda_gan * loss_gan_g +
+                      self.lambda_identity * loss_identity)
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Return metrics
+        return {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_gan_g': loss_gan_g.item(),
+            'loss_identity': loss_identity.item(),
+        }
+    
+    def validation_step(self, batch):
+        """
+        Validation step for CycleAEGAN
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if (self.loss_cycle is None or self.loss_gan_gen is None or
+            self.loss_gan_disc is None or self.loss_identity is None):
+            raise ValueError("Loss functions have not been configured yet.")
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
+
+            # Compute losses
+            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
+                          self.loss_gan_gen(self.DY(y), DYGx))
+            loss_identity = self.loss_identity(x, y, Gx, y) + self.loss_identity(y, x, Fy, x)
+            total_loss = (self.lambda_cycle * loss_cycle +
+                          self.lambda_gan * loss_gan_g +
+                            self.lambda_identity * loss_identity)
+            
+            # Return metrics
+            return {
+                'total_loss': total_loss.item(),
+                'loss_cycle': loss_cycle.item(),
+                'loss_gan_g': loss_gan_g.item(),
+                'loss_identity': loss_identity.item(),
+            }
+
     
     
 class CycleVAEGAN (nn.Module):
@@ -685,6 +1082,136 @@ class CycleVAEGAN (nn.Module):
         DYy = self.DY(y)
         return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy, DYGx, DXFy, DXx, DYy # All Netework expect Gx as their first output
     
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else :
+            raise KeyError("optimizer state not found in states")
+        
+    def configure_loss(self, **kwargs):
+        """Configure loss functions"""
+        self.loss_cycle = CycleConsistencyLoss()
+        self.loss_gan_gen = GANLossGenerator()
+        self.loss_gan_disc = GANLossDiscriminator()
+        self.loss_identity = IdentityLoss()
+        self.loss_kl = KLDivergenceLoss()
+        self.lambda_gan = kwargs.get('lambda_gan', 1.0)
+        self.lambda_identity = kwargs.get('lambda_identity', 5.0)
+        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
+        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+
+    def training_step(self, batch):
+        """
+        Training step for CycleVAEGAN
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics
+        """
+        if (self.loss_cycle is None or self.loss_gan_gen is None or
+            self.loss_gan_disc is None or self.loss_identity is None or
+            self.loss_kl is None):
+            raise ValueError("Loss functions have not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        
+        x = batch['x']
+        y = batch['y']
+
+        # Forward pass
+        (Gx, FGx, Fy, GFy,
+         mu_x, logvar_x, mu_FGx, logvar_FGx,
+         mu_y, logvar_y, mu_GFy, logvar_GFy,
+         DYGx, DXFy, DXx, DYy) = self(x, y)
+
+        # Compute losses
+        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
+                      self.loss_gan_gen(DYy, DYGx))
+        loss_identity = (self.loss_identity(x, y, FGx, GFy) +
+                         self.loss_identity(y, x, GFy, FGx))
+        loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
+                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
+        
+        total_loss = (self.lambda_cycle * loss_cycle +
+                      self.lambda_gan * loss_gan_g +
+                      self.lambda_identity * loss_identity +
+                      self.lambda_kl * loss_kl)
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        
+        # Return metrics
+        return {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_gan_g': loss_gan_g.item(),
+            'loss_identity': loss_identity.item(),
+            'loss_kl': loss_kl.item(),
+        }
+    
+    def validation_step(self, batch):
+        """
+        Validation step for CycleVAEGAN
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if (self.loss_cycle is None or self.loss_gan_gen is None or
+            self.loss_gan_disc is None or self.loss_identity is None or
+            self.loss_kl is None):
+            raise ValueError("Loss functions have not been configured yet.")
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            (Gx, FGx, Fy, GFy,
+             mu_x, logvar_x, mu_FGx, logvar_FGx,
+             mu_y, logvar_y, mu_GFy, logvar_GFy,
+             DYGx, DXFy, DXx, DYy) = self(x, y)
+            
+            # Compute losses
+            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
+                          self.loss_gan_gen(DYy, DYGx))
+            loss_identity = (self.loss_identity(x, y, FGx, GFy) +
+                             self.loss_identity(y, x, GFy, FGx))
+            
+            loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
+                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
+            
+            total_loss = (self.lambda_cycle * loss_cycle +
+                          self.lambda_gan * loss_gan_g +
+                          self.lambda_identity * loss_identity +
+                          self.lambda_kl * loss_kl)
+            
+            # Return metrics
+            return {
+                'total_loss': total_loss.item(),
+                'loss_cycle': loss_cycle.item(),
+                'loss_gan_g': loss_gan_g.item(),
+                'loss_identity': loss_identity.item(),
+                'loss_kl': loss_kl.item(),
+            }
+    
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -698,41 +1225,77 @@ if __name__ == "__main__":
     encoded = encoder(x)
     print("Encoded shape:", encoded.shape)  # Encoded shape: torch.Size([10, 1024, 16, 16])
 
+    # release memory
+    del encoder
+    torch.cuda.empty_cache()
+
     decoder = Decoder().to(device)
     decoded = decoder(encoded)
     print("Decoded shape:", decoded.shape)  # Decoded shape: torch.Size([10, 3, 256, 256])
+
+    # release memory
+    del decoder
+    torch.cuda.empty_cache()
 
     variational_encoder_block = VariationalEncoderBlock(in_channels=1024, latent_dim=64).to(device)
     z, mu, logvar = variational_encoder_block(encoded)
     print("Variational Encoder Block output shape:", z.shape)  # Variational Encoder Block output shape: torch.Size([10, 64, 16, 16])
 
+    # release memory
+    del variational_encoder_block
+    torch.cuda.empty_cache()
+
     variational_decoder_block = VariationalDecoderBlock(latent_dim=64, out_channels=1024).to(device)
     decoded_latent = variational_decoder_block(z)
     print("Variational Decoder Block output shape:", decoded_latent.shape)  # Variational Decoder Block output shape: torch.Size([10, 1024, 16, 16])
     
+    # release memory
+    del variational_decoder_block
+    torch.cuda.empty_cache()
+
     discriminator = Discriminator().to(device)
     validity = discriminator(x)
     print("Discriminator output shape:", validity.shape)    # Discriminator output shape: torch.Size([10]) -> see comment in Discriminator forward method
+
+    # release memory
+    del discriminator
+    torch.cuda.empty_cache()
 
     # Test the networks composites
     Autoencoder_instance = Autoencoder().to(device)
     Gx = Autoencoder_instance(x)
     print("Autoencoder output shape:", Gx.shape)  # Autoencoder output shape: torch.Size([10, 3, 256, 256])
 
+    # release memory
+    del Autoencoder_instance
+    torch.cuda.empty_cache()
+
     vae = VariationalAutoencoder(latent_dim=64).to(device)
     x_recon, mu, logvar = vae(x)
     print("VAE Reconstructed shape:", x_recon.shape)    # VAE Reconstructed shape: torch.Size([10, 3, 256, 256])
     print("VAE Mu shape:", mu.shape)    # VAE Mu shape: torch.Size([10, 64, 16, 16])
+
+    # release memory
+    del vae
+    torch.cuda.empty_cache()
 
     aegan = AEGAN().to(device) # There's no latent dim for AEGAN
     Gx, DGx, Dx = aegan(x)
     print("AEGAN Reconstructed shape:", Gx.shape)    # AEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
     print("AEGAN Discriminator output shape:", DGx.shape)    # AEGAN Discriminator output shape: torch.Size([10])
 
+    # release memory
+    del aegan
+    torch.cuda.empty_cache()
+
     vaegan = VAEGAN(latent_dim=64).to(device)
     Gx, mu, logvar,DGx, Dx, = vaegan(x)
     print("VAEGAN Reconstructed shape:", Gx.shape)    # VAEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
     print("VAEGAN Discriminator output shape:", DGx.shape)    # VAEGAN Discriminator output shape: torch.Size([10]) -> see comment in Discriminator forward method
+
+    # release memory
+    del vaegan
+    torch.cuda.empty_cache()
 
     cycle_aegan = CycleAEGAN().to(device) # There's no latent dim for CycleAEGAN
     y = torch.randn((10, 3, 256, 256)).to(device)
@@ -742,4 +1305,25 @@ if __name__ == "__main__":
     print("CycleAE Fy shape:", Fy.shape)  # CycleAE Fy shape: torch.Size([10, 3, 256, 256])
     print("CycleAE GFy shape:", GFy.shape) # CycleAE GFy shape: torch.Size([10, 3, 256, 256])
 
-    
+
+    # The last model requires too much memory to be tested with the others, 
+    # so it is commented out. You can uncomment and test it separately if needed.
+    # # release memory
+    # del cycle_aegan
+    # torch.cuda.empty_cache()
+
+    # y = torch.randn((10, 3, 256, 256)).to(device)
+    # cycle_vaegan = CycleVAEGAN(latent_dim=64).to(device)
+    # (Gx, FGx, Fy, GFy,
+    #  mu_x, logvar_x, mu_FGx, logvar_FGx,
+    #  mu_y, logvar_y, mu_GFy, logvar_GFy,
+    #  DYGx, DXFy, DXx, DYy) = cycle_vaegan(x, y)
+    # print("CycleVAEGAN Gx shape:", Gx.shape)   # CycleVAEGAN Gx shape: torch.Size([10, 3, 256, 256])
+    # print("CycleVAEGAN FGx shape:", FGx.shape)  # CycleVAEGAN FGx shape: torch.Size([10, 3, 256, 256])
+    # print("CycleVAEGAN Fy shape:", Fy.shape)  # CycleVAEGAN Fy shape: torch.Size([10, 3, 256, 256])
+    # print("CycleVAEGAN GFy shape:", GFy.shape) # CycleVAEGAN GFy shape: torch.Size([10, 3, 256, 256])
+
+    # # release memory
+    # del cycle_vaegan
+
+    print("All tests passed successfully.")

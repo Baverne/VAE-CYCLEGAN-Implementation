@@ -55,6 +55,8 @@ class IdentityLoss(nn.Module):
 
 class GANLossGenerator(nn.Module):
     """
+    Adversarial Loss for Generators (LSGAN)
+
     L_GAN^{X->Y} = D_Y(y)^2 + (1 - D_Y(G(x)))^2
     L_GAN^{Y->X} = D_X(x)^2 + (1 - D_X(F(y)))^2
     """
@@ -179,7 +181,7 @@ class VAEGANLoss(nn.Module):
     def __init__(self, lambda_gan=1.0, lambda_identity=5.0, lambda_kl=1e-5):
         super(VAEGANLoss, self).__init__()
         self.translation_loss = TranslationLoss()
-        self.gan_loss_gen = GANLossGenerator()
+        self.gan_loss_gen = GANLossGenerator()  # isn't the discriminator loss instead ?
         self.identity_loss = IdentityLoss()
         self.kl_loss = KLDivergenceLoss()
         self.lambda_gan = lambda_gan
