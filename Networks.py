@@ -159,7 +159,24 @@ class Encoder (nn.Module):
 
     def forward(self, x):
         return self.model(x)
-    
+
+
+class Decoder (nn.Module):
+    def __init__(self):
+        super(Decoder, self).__init__()
+        layers = []
+        layers.append(R(1024))
+        layers.append(U(1024, 512))
+        layers.append(U(512, 256))
+        layers.append(U(256, 128))
+        layers.append(U(128, 64))
+        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="ReLU"))
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.model(x)
+
+
 class VariationalEncoderBlock (nn.Module):
     def __init__(self, in_channels, latent_dim=64):
         super(VariationalEncoderBlock, self).__init__()
@@ -185,22 +202,6 @@ class VariationalDecoderBlock (nn.Module):
         return x_recon
 
 
-class Decoder (nn.Module):
-    def __init__(self):
-        super(Decoder, self).__init__()
-        layers = []
-        layers.append(R(1024))
-        layers.append(U(1024, 512))
-        layers.append(U(512, 256))
-        layers.append(U(256, 128))
-        layers.append(U(128, 64))
-        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Tanh"))
-        self.model = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.model(x)
-
-
 class Discriminator (nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
@@ -216,7 +217,7 @@ class Discriminator (nn.Module):
     def forward(self, x):
         #shape (B, 1, 1, 1) to (B,1)
         return self.model(x).view(-1, 1).squeeze(1) # Then we should not squeeze and have shape (B x 1 x 1 x 2) ?
-    # i guess we can skeeze to have (B x 2) for real/fake classification but also keep 1 channel that will be 0 for fake and 1 for real ?
+    # i guess we can squeeze to have (B x 2) for real/fake classification but also keep 1 channel that will be 0 for fake and 1 for real ?
     # Don't know what's the best option 
     
 ### NETWORKS COMPOSITES ###
@@ -291,6 +292,8 @@ class Autoencoder (nn.Module):
         # Return metrics
         return {
             'G_loss': loss_trans.item(),
+            'loss_trans': loss_trans.item(),
+            'total_loss': loss_trans.item()
         }
     
     def validation_step(self, batch):
@@ -316,6 +319,7 @@ class Autoencoder (nn.Module):
             
             # Return metrics
             return {
+                'G_loss': loss_trans.item(),
                 'total_loss': loss_trans.item(),
                 'loss_trans': loss_trans.item(),
                 'output': output
@@ -441,7 +445,6 @@ class VariationalAutoencoder (nn.Module):
                 'loss_kl': loss_kl.item(),
                 'output': output
             }
-        
 
     
 class AEGAN (nn.Module):
@@ -933,6 +936,7 @@ class CycleVAE (nn.Module):
             'loss_kl': loss_kl.item(),
         }
 
+
 class CycleAEGAN (nn.Module):
     def __init__(self):
         super(CycleAEGAN, self).__init__()
@@ -1060,8 +1064,7 @@ class CycleAEGAN (nn.Module):
                 'loss_identity': loss_identity.item(),
             }
 
-    
-    
+       
 class CycleVAEGAN (nn.Module):
     
     def __init__(self, latent_dim=64):
