@@ -283,6 +283,64 @@ class HypersimDataset(Dataset):
         return filtered_dataset
 
 
+class UnpairedImageDataset(Dataset):
+    def __init__(
+        self,
+        root_dir,
+        split="train",
+        transform=None,
+        return_paths=False
+    ):
+        """
+        root_dir/
+            trainA/
+            trainB/
+            testA/
+            testB/
+        """
+        self.dir_A = os.path.join(root_dir, f"{split}A")
+        self.dir_B = os.path.join(root_dir, f"{split}B")
+
+        self.images_A = sorted(os.listdir(self.dir_A))
+        self.images_B = sorted(os.listdir(self.dir_B))
+
+        self.transform = transform
+        self.return_paths = return_paths
+
+    def __len__(self):
+        # Important: length is max, not min
+        return max(len(self.images_A), len(self.images_B))
+
+    def __getitem__(self, idx):
+        # deterministic for A
+        img_A_path = os.path.join(
+            self.dir_A, self.images_A[idx % len(self.images_A)]
+        )
+
+        # random for B (true unpaired sampling)
+        img_B_path = os.path.join(
+            self.dir_B, random.choice(self.images_B)
+        )
+
+        img_A = Image.open(img_A_path).convert("RGB")
+        img_B = Image.open(img_B_path).convert("RGB")
+
+        if self.transform:
+            img_A = self.transform(img_A)
+            img_B = self.transform(img_B)
+
+        sample = {
+            "A": img_A,
+            "B": img_B
+        }
+
+        if self.return_paths:
+            sample["A_path"] = img_A_path
+            sample["B_path"] = img_B_path
+
+        return sample
+
+
 if __name__ == "__main__":
     """
     # Basic usage without transforms
