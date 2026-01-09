@@ -28,8 +28,8 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 # Import networks, losses, and data manager
-from networks import *
-from data_Manager import HypersimDataset
+from Networks import *
+from Data_Manager import HypersimDataset, UnpairedImageDataset
 
 
 def create_model(architecture):
@@ -43,9 +43,23 @@ def create_model(architecture):
     elif architecture == 'aegan':
         model = AEGAN()
         print(f"Created Autoencoder GAN")
+    elif architecture == 'vaegan':
+        model = VAEGAN()
+        print(f"Created VAE-GAN")
+    elif architecture == 'cycleae':
+        model = CycleAE()
+        print(f"Created Cycle Autoencoder")
+    elif architecture == 'cyclevae':
+        model = CycleVAE()
+        print(f"Created Cycle Variational Autoencoder")
+    elif architecture == 'cycleaegan':
+        model = CycleAEGAN()
+        print(f"Created Cycle Autoencoder GAN")
+    elif architecture == 'cyclevaegan':
+        model = CycleVAEGAN()
+        print(f"Created Cycle VAE-GAN")
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
-    
     return model
 
 
@@ -162,9 +176,9 @@ def validate(model, dataloader, device, args):
     return avg_loss, avg_loss_components, last_output, last_x, last_y
 
 
-def create_dataloaders(args):
+def create_dataloaders_paired(args):
     """
-    Create train and test dataloaders with appropriate transforms
+    Create train and test dataloaders for paired dataset with appropriate transforms
     
     Returns:
         train_loader: DataLoader for training
@@ -185,7 +199,7 @@ def create_dataloaders(args):
     
     # Create dataset with transforms
     train_dataset = HypersimDataset(
-        root_dir=args.data_dir,
+        root_dir=args.data_dir + '/paired',
         modalities=[args.source_modality, args.target_modality],
         transform=general_transform,
         color_transform=color_transform, 
@@ -226,10 +240,61 @@ def create_dataloaders(args):
     return train_loader, test_loader
 
 
+def create_dataloaders_unpaired(args):
+    """
+    Create train and test dataloaders for unpaired dataset using summer2winter dataset.
+    Returns:
+        train_loader: DataLoader for training
+        test_loader: DataLoader for testing (or None if test_split=0)
+    """
+    unpaired_transform = transforms.Compose([
+        transforms.Resize(args.image_size),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.5, 0.5, 0.5],
+            std=[0.5, 0.5, 0.5]
+        )
+    ])
+    train_dataset = UnpairedImageDataset(
+        root_dir=args.data_dir + "/summer2winter",
+        split="train",
+        transform=unpaired_transform
+    )
+
+    test_dataset = UnpairedImageDataset(
+        root_dir=args.data_dir + "/summer2winter",
+        split="test",
+        transform=unpaired_transform
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    print(f"Training samples: {len(train_dataset)}")
+    print(f"Testing samples: {len(test_dataset)}")
+
+    return train_loader, test_loader
+    
+
+
 def main(args):
 
     # Checks of good practice
-    if not args.architecture in ['autoencoder', 'vae']:
+    if args.architecture in ['autoencoder', 'vae']:
         if args.source_modality != args.target_modality:
             raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
     
@@ -237,15 +302,22 @@ def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     print(f"Using device: {device}")
     
-    # Create output directory
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Output directory: {output_dir}")
-    
-    # Save arguments
-    with open(output_dir / 'args.json', 'w') as f:
-        json.dump(vars(args), f, indent=2)
+    # Determine output directory: if resuming, continue in the checkpoint directory
+    if args.resume:
+        checkpoint_path = Path(args.resume)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"No checkpoint found at {checkpoint_path}")
+        output_dir = checkpoint_path.parent
+        print(f"Resuming run in directory: {output_dir}")
+    else:
+        # Create new output directory with timestamp
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Save arguments only for new runs
+        with open(output_dir / 'args.json', 'w') as f:
+            json.dump(vars(args), f, indent=2)
+        print(f"Output directory: {output_dir}")
     
     # Create TensorBoard writer
     tensorboard_dir = output_dir / 'tensorboard'
@@ -253,8 +325,13 @@ def main(args):
     print(f"TensorBoard logs: {tensorboard_dir}")
     print(f"Run 'tensorboard --logdir={tensorboard_dir}' to visualize")
     
-    # Create dataloaders
-    train_loader, test_loader = create_dataloaders(args)
+    # Create dataloaders (paired or unpaired)
+    if args.unpaired:
+        train_loader, test_loader = create_dataloaders_unpaired(args)
+        print("Using unpaired dataset (summer2winter)")
+    else:
+        train_loader, test_loader = create_dataloaders_paired(args)
+        print("Using paired dataset (hypersim)")
     
     # Create model
     model = create_model(args.architecture).to(device)
@@ -274,9 +351,8 @@ def main(args):
     if args.resume:
         print(f"Resuming from checkpoint: {args.resume}")
         checkpoint_path = Path(args.resume)
-        if checkpoint_path.exists():
-            start_epoch, _ = load_checkpoint(model, checkpoint_path, device)
-            start_epoch += 1
+        start_epoch, _ = load_checkpoint(model, checkpoint_path, device)
+        start_epoch += 1
     
     # Training loop
     print(f"\nStarting training for {args.epochs} epochs...")
@@ -354,11 +430,13 @@ if __name__ == '__main__':
     
     # Architecture selection
     parser.add_argument('--architecture', type=str, default='autoencoder',
-                        choices=['autoencoder', 'vae', 'aegan'], ## rest of architectures can be added here
+                        choices=['autoencoder', 'vae', 'aegan',
+                                 'vaegan', 'cycleae', 'cyclevae',
+                                 'cycleaegan', 'cyclevaegan'],
                         help='Network architecture to train')
     
     # Data parameters
-    parser.add_argument('--data_dir', type=str, default='dataset',
+    parser.add_argument('--data_dir', type=str, default='datasets',
                         help='Path to dataset directory')
     parser.add_argument('--source_modality', type=str, default='depth',
                         help='Source modality (input)')
@@ -368,9 +446,11 @@ if __name__ == '__main__':
                         help='Image size for training')
     parser.add_argument('--test_split', type=float, default=0.1,
                         help='Test split ratio')
+    parser.add_argument('--unpaired', action='store_true',
+                        help='Use unpaired dataset (summer2winter) instead of paired hypersim dataset')
     
     # Training parameters
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=5,
                         help='Batch size')
     parser.add_argument('--epochs', type=int, default=100,
                         help='Number of epochs')
@@ -387,7 +467,7 @@ if __name__ == '__main__':
     
     
     # Checkpointing and output
-    parser.add_argument('--output_dir', type=str, default='output',
+    parser.add_argument('--output_dir', type=str, default='runs',
                         help='Directory to save models and logs')
     parser.add_argument('--save_freq', type=int, default=10,
                         help='Save checkpoint every N epochs')
