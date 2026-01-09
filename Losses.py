@@ -217,6 +217,24 @@ class CycleAELossUnpaired(nn.Module):
     Loss for Cycle AE (unpaired)
     L = λ_cycle * L_cycle
     """
+    def __init__(self, lambda_cycle=10.0):
+        super(CycleAELossUnpaired, self).__init__()
+        self.cycle_loss = CycleConsistencyLoss()
+        self.lambda_cycle = lambda_cycle
+    
+    def forward(self, model_output, x, y):
+        FGx, GFy = model_output
+        
+        loss_cycle = self.cycle_loss(x, y, FGx, GFy)
+        
+        total_loss = self.lambda_cycle * loss_cycle
+        
+        losses_dict = {
+            'loss_total': total_loss.item(),
+            'loss_cycle': loss_cycle.item()
+        }
+        
+        return total_loss, losses_dict
 
 
 class AECycleGANLoss(nn.Module):
@@ -224,6 +242,38 @@ class AECycleGANLoss(nn.Module):
     Loss for AE-CycleGAN (unpaired)
     L = λ_GAN * L_GAN + λ_identity * L_id + λ_cycle * L_cycle
     """
+    def __init__(self, lambda_gan=1.0, lambda_identity=5.0, lambda_cycle=10.0):
+        super(AECycleGANLoss, self).__init__()
+        self.gan_loss_gen = GANLossGenerator()
+        self.identity_loss = IdentityLoss()
+        self.cycle_loss = CycleConsistencyLoss()
+        self.lambda_gan = lambda_gan
+        self.lambda_identity = lambda_identity
+        self.lambda_cycle = lambda_cycle
+    
+    def forward(self, model_output, x, y, Dx_real, Dy_real):
+        Gx, FGx, Fy, GFy, Dx_fake, Dy_fake = model_output
+        
+        loss_gan_XtoY = self.gan_loss_gen(Dy_real, Dy_fake)
+        loss_gan_YtoX = self.gan_loss_gen(Dx_real, Dx_fake)
+        loss_gan = loss_gan_XtoY + loss_gan_YtoX
+        
+        loss_id = self.identity_loss(x, y, Gx, Fy)
+        
+        loss_cycle = self.cycle_loss(x, y, FGx, GFy)
+        
+        total_loss = (self.lambda_gan * loss_gan + 
+                      self.lambda_identity * loss_id + 
+                      self.lambda_cycle * loss_cycle)
+        
+        losses_dict = {
+            'loss_total': total_loss.item(),
+            'loss_gan': loss_gan.item(),
+            'loss_identity': loss_id.item(),
+            'loss_cycle': loss_cycle.item()
+        }
+        
+        return total_loss, losses_dict
 
 
 class CycleVAELossUnpaired(nn.Module):
@@ -231,6 +281,35 @@ class CycleVAELossUnpaired(nn.Module):
     Loss for Cycle-VAE (unpaired)
     L = λ_cycle * L_cycle + λ_kl * L_KL
     """
+    def __init__(self, lambda_cycle=10.0, lambda_kl=1e-5):
+        super(CycleVAELossUnpaired, self).__init__()
+        self.cycle_loss = CycleConsistencyLoss()
+        self.kl_loss = KLDivergenceLoss()
+        self.lambda_cycle = lambda_cycle
+        self.lambda_kl = lambda_kl
+    
+    def forward(self, model_output, x, y):
+        FGx, GFy, mu_x, logvar_x, mu_y, logvar_y = model_output
+        
+        loss_cycle = self.cycle_loss(x, y, FGx, GFy)
+        
+        # KL losses for both domains
+        loss_kl_x = self.kl_loss(mu_x, logvar_x)
+        loss_kl_y = self.kl_loss(mu_y, logvar_y)
+        # Don't we need 4 KL losses here ? (FGx and GFy as well) or even only these FGx and GFy ?
+        loss_kl = loss_kl_x + loss_kl_y
+        
+        total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
+        
+        losses_dict = {
+            'loss_total': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_kl': loss_kl.item(),
+            'loss_kl_x': loss_kl_x.item(),
+            'loss_kl_y': loss_kl_y.item()
+        }
+        
+        return total_loss, losses_dict
 
 
 
@@ -239,3 +318,47 @@ class VAECycleGANLoss(nn.Module):
     Loss for VAE-CycleGAN (unpaired)
     L = λ_GAN * L_GAN + λ_identity * L_id + λ_cycle * L_cycle + λ_kl * L_KL
     """
+    def __init__(self, lambda_gan=1.0, lambda_identity=5.0, lambda_cycle=10.0, lambda_kl=1e-5):
+        super(VAECycleGANLoss, self).__init__()
+        self.gan_loss_gen = GANLossGenerator()
+        self.identity_loss = IdentityLoss()
+        self.cycle_loss = CycleConsistencyLoss()
+        self.kl_loss = KLDivergenceLoss()
+        self.lambda_gan = lambda_gan
+        self.lambda_identity = lambda_identity
+        self.lambda_cycle = lambda_cycle
+        self.lambda_kl = lambda_kl
+
+    def forward(self, model_output, x, y, Dx_real, Dy_real):
+        Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_y, logvar_y, Dx_fake, Dy_fake = model_output
+        
+        loss_gan_XtoY = self.gan_loss_gen(Dy_real, Dy_fake)
+        loss_gan_YtoX = self.gan_loss_gen(Dx_real, Dx_fake)
+        loss_gan = loss_gan_XtoY + loss_gan_YtoX
+        
+        loss_id = self.identity_loss(x, y, Gx, Fy)
+        
+        loss_cycle = self.cycle_loss(x, y, FGx, GFy)
+        
+        # KL losses for both domains
+        loss_kl_x = self.kl_loss(mu_x, logvar_x)
+        loss_kl_y = self.kl_loss(mu_y, logvar_y)
+        # Don't we need 4 KL losses here ? (FGx and GFy as well) or even only these FGx and GFy ?
+        loss_kl = loss_kl_x + loss_kl_y
+        
+        total_loss = (self.lambda_gan * loss_gan + 
+                      self.lambda_identity * loss_id + 
+                      self.lambda_cycle * loss_cycle + 
+                      self.lambda_kl * loss_kl)
+        
+        losses_dict = {
+            'loss_total': total_loss.item(),
+            'loss_gan': loss_gan.item(),
+            'loss_identity': loss_id.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_kl': loss_kl.item(),
+            'loss_kl_x': loss_kl_x.item(),
+            'loss_kl_y': loss_kl_y.item()
+        }
+        
+        return total_loss, losses_dict
