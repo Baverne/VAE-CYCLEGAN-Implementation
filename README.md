@@ -37,7 +37,7 @@
 | 5.1 | Domain Adaptation : Since it's unpaired, can we use real life X with synthetic Y? | ⬜ |
 | 5.2 | Transfer Learning on New Translation Task ? | ⬜ |
 
-## Dataset
+## Paired Dataset
 
 We use the **Hypersim Dataset**, a synthetic dataset that provides photorealistic images with extra modalities for various environments.
 
@@ -137,8 +137,35 @@ The Hypersim Dataset is publicly available at: https://github.com/apple/ml-hyper
     booktitle = {International Conference on Computer Vision (ICCV) 2021},
     year      = {2021}
 }
+
+@inproceedings{CycleGAN2017,
+  title={Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks},
+  author={Zhu, Jun-Yan and Park, Taesung and Isola, Phillip and Efros, Alexei A},
+  booktitle={Computer Vision (ICCV), 2017 IEEE International Conference on},
+  year={2017}
+}
 ```
 
-### Licenses
+### Accessing the Unpaired Dataset (Summer2Winter Yosemite)
 
-The Hypersim Dataset is licensed under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/).
+For unpaired image-to-image translation tasks (e.g., season transfer), we use [Summer2Winter Yosemite dataset](https://www.kaggle.com/datasets/balraj98/summer2winter-yosemite?resource=download) available on Kaggle.
+
+**Steps to access and use the dataset:**
+1. Go to the [Summer2Winter Yosemite Kaggle page](https://www.kaggle.com/datasets/balraj98/summer2winter-yosemite?resource=download).
+2. Download the dataset (requires a Kaggle account).
+3. Extract the contents and place them in the `datasets/unpaired/` directory:
+   ```bash
+   unzip summer2winter-yosemite.zip -d datasets/unpaired/
+   ```
+4. The dataset contains two folders: `summer` and `winter`, each with unpaired images for the respective seasons.
+5. Use these folders for unpaired translation experiments (e.g., training CycleGAN).
+
+**Note:**
+- If you use Kaggle's API, you can download directly with:
+  ```bash
+  kaggle datasets download -d balraj98/summer2winter-yosemite -p datasets/unpaired/
+  unzip datasets/unpaired/summer2winter-yosemite.zip -d datasets/unpaired/
+  ```
+- Make sure you have the [Kaggle API](https://github.com/Kaggle/kaggle-api) installed and configured.
+
+For more details, see the dataset page on Kaggle.

@@ -257,13 +257,13 @@ def create_dataloaders_unpaired(args):
         )
     ])
     train_dataset = UnpairedImageDataset(
-        root_dir=args.data_dir + "/summer2winter",
+        root_dir=args.data_dir + "/unpaired",
         split="train",
         transform=unpaired_transform
     )
 
     test_dataset = UnpairedImageDataset(
-        root_dir=args.data_dir + "/summer2winter",
+        root_dir=args.data_dir + "/unpaired",
         split="test",
         transform=unpaired_transform
     )
