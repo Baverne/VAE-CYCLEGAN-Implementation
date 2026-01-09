@@ -10,15 +10,15 @@
 | 1 | **Implement Networks** | |
 | 1.1 | AE (Autoencoder) | ✅ |
 | 1.2 | AE - GAN (Generative Adversarial Network) | ✅ |
-| 1.3 | Cycle - AE | ⬜ |
-| 1.4 | AE - CycleGAN | ⬜ |
+| 1.3 | Cycle - AE | ✅ |
+| 1.4 | AE - CycleGAN | ✅ |
 | 1.5 | VAE (Variational Autoencoder) | ✅ |
-| 1.6 | VAE-GAN | ⬜ |
-| 1.7 | Cycle - VAE | ⬜ |
-| 1.8 | VAE-CycleGAN | ⬜ |
+| 1.6 | VAE-GAN | ✅ |
+| 1.7 | Cycle - VAE | ✅ |
+| 1.8 | VAE-CycleGAN | ✅ |
 | 2 | **Constitute the Datasets** | |
 | 2.1 | Constitute a paired dataset (work for all architectures) | ✅ |
-| 2.2 | Constitute an unpaired dataset (face to face, day to night, rainy to sunny ... ) | ⬜ |
+| 2.2 | Constitute an unpaired dataset (face to face, day to night, rainy to sunny ... ) | ✅ |
 | 3 | **Training** | |
 | 3.1 | Train AE | ⬜ |
 | 3.2 | Train AE - GAN | ⬜ |
@@ -47,7 +47,7 @@ The full Hypersim dataset is quite large (~1.9 TB). For practical purposes, we p
 The dataset can be downloaded using the provided script that samples diverse images from the full Hypersim dataset:
 
 ```powershell
-python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_modalities --repo_path path\to\ml-hypersim --output_dir datasets --seed 42
+python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_modalities --repo_path path\to\ml-hypersim --output_dir datasets\paired --seed 42
 ```
 
 **Prerequisites:**
