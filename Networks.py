@@ -608,6 +608,7 @@ class AEGAN (nn.Module):
                 'loss_trans': loss_trans.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_id.item(),
+                'output': Gx
             }
 
 
@@ -713,7 +714,7 @@ class VAEGAN (nn.Module):
             'loss_trans': loss_trans.item(),
             'loss_gan': loss_gan.item(),
             'loss_identity': loss_id.item(),
-            'loss_kl': loss_kl.item()
+            'loss_kl': loss_kl.item(),
         }
 
     def validation_step(self, batch):
@@ -751,6 +752,7 @@ class VAEGAN (nn.Module):
                 'loss_gan': loss_gan.item(),
                 'loss_identity': loss_id.item(),
                 'loss_kl': loss_kl.item(),
+                'output': Gx
             }
 
 
@@ -854,6 +856,11 @@ class CycleAE (nn.Module):
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_trans': loss_trans.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
 
 
@@ -936,6 +943,43 @@ class CycleVAE (nn.Module):
             'loss_trans': loss_trans.item(),
             'loss_kl': loss_kl.item(),
         }
+    
+    def validation_step(self, batch):
+        """
+        Validation step for CycleVAE
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.loss_cycle is None or self.loss_trans is None or self.loss_kl is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
+
+            # Compute losses
+            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+            loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
+                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
+            total_loss = loss_cycle + loss_trans + self.lambda_kl * loss_kl
+
+            # Return metrics
+            return {
+                'total_loss': total_loss.item(),
+                'loss_cycle': loss_cycle.item(),
+                'loss_trans': loss_trans.item(),
+                'loss_kl': loss_kl.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ??????
+            }
 
 
 class CycleAEGAN (nn.Module):
@@ -1063,6 +1107,11 @@ class CycleAEGAN (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
 
        
@@ -1214,6 +1263,11 @@ class CycleVAEGAN (nn.Module):
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
                 'loss_kl': loss_kl.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
 
 ### Unpaired Datasets Networks ###
@@ -1314,6 +1368,11 @@ class CycleAE_unpaired(nn.Module):
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
     
 class CycleVAE_unpaired (nn.Module):
@@ -1393,6 +1452,40 @@ class CycleVAE_unpaired (nn.Module):
             'loss_cycle': loss_cycle.item(),
             'loss_kl': loss_kl.item(),
         }
+    def validation_step(self, batch):
+        """
+        Validation step for CycleVAE unpaired
+        Args:
+            batch: dict with 'x' (input) and 'y' (target)
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.loss_cycle is None or self.loss_kl is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
+
+            # Compute losses
+            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
+                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
+            total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
+
+            # Return metrics
+            return {
+                'total_loss': total_loss.item(),
+                'loss_cycle': loss_cycle.item(),
+                'loss_kl': loss_kl.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
+            }
 
 
 class CycleAEGAN_unpaired (nn.Module):
@@ -1509,6 +1602,11 @@ class CycleAEGAN_unpaired (nn.Module):
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
 
 
@@ -1644,6 +1742,11 @@ class CycleVAEGAN_unpaired (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_kl': loss_kl.item(),
+                'output_Gx': Gx,
+                'output_Fy': Fy,
+                'output_FGx': FGx,
+                'output_GFy': GFy,
+                'output' : Gx  # For compatibility, return Gx as output ???????
             }
 
 if __name__ == "__main__":
