@@ -127,7 +127,7 @@ def train_epoch(model, dataloader, device, args):
         last_x = batch['x']
         last_y = batch['y']
         with torch.no_grad():
-            last_output = model(last_x)[0] # Get output only (first element)
+            last_output = model(last_x, last_y)[0] # Get output only (first element)
     
     # Average losses
     avg_loss = total_loss / len(dataloader)

@@ -100,10 +100,12 @@ class KLDivergenceLoss(nn.Module):
         super(KLDivergenceLoss, self).__init__()
     
     def forward(self, mu, logvar):
+        # Clamp logvar for numerical stability
+        logvar = torch.clamp(logvar, min=-10, max=10)
         # -0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
-        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         # Normalize by batch size and dimensions
-        return kl_loss / (mu.size(0) * mu.numel() / mu.size(0))
+        return kl_loss
 
 ### COMPOSITE LOSS FUNCTIONS ###
 # TODO: (Soon removed to be implemented in the networks themselves)
