@@ -127,7 +127,11 @@ def train_epoch(model, dataloader, device, args):
         last_x = batch['x']
         last_y = batch['y']
         with torch.no_grad():
-            last_output = model(last_x, last_y)[0] # Get output only (first element)
+            # Cycle-based models need (x, y), others only need x
+            if args.architecture.startswith('cycle'):
+                last_output = model(last_x, last_y)[0]
+            else:
+                last_output = model(last_x)[0]
     
     # Average losses
     avg_loss = total_loss / len(dataloader)
@@ -297,6 +301,9 @@ def main(args):
     if args.architecture in ['autoencoder', 'vae']:
         if args.source_modality != args.target_modality:
             raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
+    else:
+        if args.source_modality == args.target_modality:
+            raise ValueError("Source and target modalities should be different for GAN-based architectures.")
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
