@@ -392,7 +392,10 @@ def main(args):
             )
             print(f"Test Loss: {test_loss:.4f}")
             for key, value in test_loss_components.items():
-                print(f"  {key}: {value:.4f}")
+                try:
+                    print(f"  {key}: {value:.4f}")
+                except Exception as e:
+                    print(f"  {key}: {value} (could not format as float: {e})")
             
             # Log test metrics to TensorBoard
             writer.add_scalar('Loss/test', test_loss, epoch)

@@ -859,10 +859,6 @@ class CycleAE (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_trans': loss_trans.item(),
                 'G_loss': total_loss.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 
@@ -945,6 +941,7 @@ class CycleVAE (nn.Module):
             'loss_cycle': loss_cycle.item(),
             'loss_trans': loss_trans.item(),
             'loss_kl': loss_kl.item(),
+            'G_loss': total_loss.item()
         }
     
     def validation_step(self, batch):
@@ -977,11 +974,8 @@ class CycleVAE (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_trans': loss_trans.item(),
                 'loss_kl': loss_kl.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach().detach(),
-                'output_GFy': GFy.detach().detach(),
-                'output' : Gx.detach().detach()  # For compatibility, return Gx as output ??????
+                'G_loss': total_loss.item(),
+                'output' : Gx.detach()  # For compatibility, return Gx as output ??????
             }
 
 
@@ -1110,10 +1104,6 @@ class CycleAEGAN (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 
@@ -1266,10 +1256,6 @@ class CycleVAEGAN (nn.Module):
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
                 'loss_kl': loss_kl.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 
@@ -1371,10 +1357,6 @@ class CycleAE_unpaired(nn.Module):
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
     
@@ -1483,10 +1465,6 @@ class CycleVAE_unpaired (nn.Module):
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_kl': loss_kl.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 
@@ -1605,10 +1583,6 @@ class CycleAEGAN_unpaired (nn.Module):
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 
@@ -1745,10 +1719,6 @@ class CycleVAEGAN_unpaired (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_kl': loss_kl.item(),
-                'output_Gx': Gx.detach(),
-                'output_Fy': Fy.detach(),
-                'output_FGx': FGx.detach(),
-                'output_GFy': GFy.detach(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
             }
 

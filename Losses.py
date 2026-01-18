@@ -43,6 +43,10 @@ class IdentityLoss(nn.Module):
     """
     Identity Loss
     L_id = ||G(x) - x||_1 + ||F(y) - y||_1
+
+    The idea is that G(x) should be close to x if x is from domain Y, and similarly for F(y).
+
+    This is in the context where whe have a translation G: X -> Y and F: Y -> X. (x from domain Y and y from domain X)
     """
     def __init__(self):
         super(IdentityLoss, self).__init__()
