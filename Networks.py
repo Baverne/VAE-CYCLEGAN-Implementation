@@ -211,7 +211,7 @@ class Discriminator (nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
         layers = []
-        layers.append(CaSb(3, 64, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
+        layers.append(CaSb(3, 64, kernel_size=4, stride=2, padding=1, activation="LeakyReLU", use_norm=False))
         layers.append(CaSb(64, 128, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(128, 256, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(256, 512, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
