@@ -95,12 +95,12 @@ python train.py --architecture ae --source_modality depth --target_modality dept
 
 Train Auto-Encoder (depth → normal):
 ```powershell
-python train.py --architecture autoencoder --source_modality depth --target_modality normal --batch_size 8 --epochs 100
+python train.py --architecture autoencoder --source_modality normal --target_modality normal --batch_size 8 --epochs 100
 ```
 
 Train VAE (depth → normal):
 ```powershell
-python train.py --architecture vae --source_modality depth --target_modality normal --latent_dim 1024 --lambda_kl 1e-5 --epochs 100
+python train.py --architecture vae --source_modality normal --target_modality normal --latent_dim 1024 --lambda_kl 1e-5 --epochs 100
 ```
 
 Resume training from checkpoint:

@@ -189,11 +189,14 @@ def create_dataloaders_paired(args):
         test_loader: DataLoader for testing (or None if test_split=0)
     """
     # Define augmentation transform for general modalities (depth, semantic, normal)
+    # ToTensor() converts [0,255] to [0,1], Normalize converts [0,1] to [-1,1] to match Tanh output
     general_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.3),
         #transforms.RandomRotation(degrees=15),
         transforms.RandomResizedCrop(size=args.image_size, scale=(0.33, 1.0), ratio=(1,1), interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),  # [0,255] -> [0,1]
+        #transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),  # [0,1] -> [-1,1]
     ])
     
     # Define augmentation transform specifically for color images
@@ -386,7 +389,7 @@ def main(args):
         
         
         # On test set
-        if test_loader is not None:
+        if test_loader is not None and epoch % args.log_image_freq == 0 :
             test_loss, test_loss_components, test_output, test_x, test_y = validate(
                 model, test_loader, device, args
             )
@@ -403,14 +406,13 @@ def main(args):
                 writer.add_scalar(f'Loss_Components/test_{key}', value, epoch)
             
             # Log test images to TensorBoard
-            if epoch % args.log_image_freq == 0:
-                test_x_vis = test_x[:4] * 0.5 + 0.5
-                test_y_vis = test_y[:4] * 0.5 + 0.5
-                test_output_vis = test_output[:4] * 0.5 + 0.5
-                
-                writer.add_images(f'{args.source_modality}/test_input', test_x_vis, epoch)
-                writer.add_images(f'{args.target_modality}/test_target', test_y_vis, epoch)
-                writer.add_images(f'{args.target_modality}/test_output', test_output_vis, epoch)
+            test_x_vis = test_x[:4] * 0.5 + 0.5
+            test_y_vis = test_y[:4] * 0.5 + 0.5
+            test_output_vis = test_output[:4] * 0.5 + 0.5
+            
+            writer.add_images(f'{args.source_modality}/test_input', test_x_vis, epoch)
+            writer.add_images(f'{args.target_modality}/test_target', test_y_vis, epoch)
+            writer.add_images(f'{args.target_modality}/test_output', test_output_vis, epoch)
         else:
             test_loss = train_loss
         

@@ -54,7 +54,7 @@ from Losses import *
 ### ATOMIC NETWORK COMPONENTS ###
 
 class CaSb (nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=3, activation="ReLU"):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=3, activation="ReLU", use_norm = True):
         super(CaSb, self).__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, padding_mode='reflect')
         self.norm = nn.InstanceNorm2d(out_channels)
@@ -64,12 +64,18 @@ class CaSb (nn.Module):
             self.activation = nn.LeakyReLU(0.2, inplace=False)
         elif activation == "Tanh":
             self.activation = nn.Tanh()
+        elif activation == "Sigmoid":
+            self.activation = nn.Sigmoid()
+        elif activation == "Identity":
+            self.activation = nn.Identity()
         else :
             raise NotImplementedError("Activation not implemented")
+        self.use_norm = use_norm
 
     def forward(self, x):
         x = self.conv(x)
-        x = self.norm(x)
+        if self.use_norm:
+            x = self.norm(x)
         x = self.activation(x)
         return x
 
@@ -84,8 +90,8 @@ class D (nn.Module):
     def forward(self, x):
         x = self.PixelUnshuffle(x)
         x = self.conv(x)
+        x = self.activation(x)  # ReLU BEFORE InstanceNorm
         x = self.norm(x)
-        x = self.activation(x)
         return x
 
 class R (nn.Module):
@@ -96,17 +102,16 @@ class R (nn.Module):
         self.activation1 = nn.ReLU(inplace=False)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, padding_mode='reflect')
         self.norm2 = nn.InstanceNorm2d(out_channels)
-        self.activation2 = nn.ReLU(inplace=False)
+        #self.activation2 = nn.ReLU(inplace=False)
 
     def forward(self, x):
         residual = x
         x = self.conv1(x)
+        x = self.activation1(x)  # ReLU BEFORE InstanceNorm
         x = self.norm1(x)
-        x = self.activation1(x)
         x = self.conv2(x)
         x = self.norm2(x)
         x = x + residual
-        x = self.activation2(x)
         return x
 
 class U (nn.Module):
@@ -120,8 +125,8 @@ class U (nn.Module):
     def forward(self, x):
         x = self.PixelShuffle(x)
         x = self.conv(x)
+        x = self.activation(x)  # ReLU BEFORE InstanceNorm
         x = self.norm(x)
-        x = self.activation(x)
         return x
     
 class S (nn.Module):
@@ -170,12 +175,11 @@ class Decoder (nn.Module):
         layers.append(U(512, 256))
         layers.append(U(256, 128))
         layers.append(U(128, 64))
-        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Tanh"))
+        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Sigmoid activation to have output in [0,1]
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.model(x)
-
 
 class VariationalEncoderBlock (nn.Module):
     def __init__(self, in_channels, latent_dim=64):

@@ -172,21 +172,15 @@ class HypersimDataset(Dataset):
                 # Reset random state for each modality to ensure same transform
                 torch.set_rng_state(random_state)
                 
-                # Apply general transform (spatial transforms will be identical)
+                # Apply color-specific transform BEFORE general transform for color modality
+                # This ensures ColorJitter is applied on PIL image before ToTensor/Normalize
+                if modality == 'color' and self.color_transform is not None:
+                    img = self.color_transform(img)
+                
+                # Apply general transform (spatial transforms + ToTensor + Normalize)
                 transformed_img = self.transform(img)
                 
-                # Apply color-specific transform for color modality (in addition to general transform)
-                if modality == 'color' and self.color_transform is not None:
-                    # If transform returns tensor, convert back to PIL for color transform
-                    if isinstance(transformed_img, torch.Tensor):
-                        # Convert tensor back to PIL for color transform
-                        transformed_img = transforms.ToPILImage()(transformed_img)
-                        transformed_img = self.color_transform(transformed_img)
-                        # ToTensor will be applied below
-                    else:
-                        transformed_img = self.color_transform(transformed_img)
-                
-                # Ensure final result is a tensor
+                # Ensure final result is a tensor (in case transform doesn't include ToTensor)
                 if not isinstance(transformed_img, torch.Tensor):
                     transformed_img = transforms.ToTensor()(transformed_img)
                 
