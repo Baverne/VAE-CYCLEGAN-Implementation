@@ -286,22 +286,22 @@ class Autoencoder (nn.Module):
         
         # Forward pass
         output = self(x)
-        
+
         # Compute loss
         loss_trans = self.loss_fn(output, y)
-        
+
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'G_loss': loss_trans.item(),
             'loss_trans': loss_trans.item(),
             'total_loss': loss_trans.item()
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for Autoencoder
@@ -316,7 +316,7 @@ class Autoencoder (nn.Module):
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
-            
+
             # Forward pass
             output = self(x)
             
@@ -396,27 +396,27 @@ class VariationalAutoencoder (nn.Module):
             raise ValueError("KL divergence loss function has not been configured yet.")
         x = batch['x']
         y = batch['y']
-        
-        # Forward pass      
+
+        # Forward pass
         output, mu, logvar = self(x)
-        
+
         # Compute losses
         loss_trans = self.loss_trans_fn(output, y)
         loss_kl = self.loss_kl_fn(mu, logvar)
         G_loss = loss_trans + self.lambda_kl * loss_kl
-        
+
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'G_loss': G_loss.item(),
             'loss_trans': loss_trans.item(),
             'loss_kl': loss_kl.item()
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for VAE
@@ -431,11 +431,11 @@ class VariationalAutoencoder (nn.Module):
             raise ValueError("Translation loss function has not been configured yet.")
         if self.loss_kl_fn is None:
             raise ValueError("KL divergence loss function has not been configured yet.")
-        
+
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
-            
+
             # Forward pass
             output, mu, logvar = self(x)
             
@@ -470,11 +470,11 @@ class AEGAN (nn.Module):
         self.lambda_gan = 0
         self.lambda_identity = 0
 
-    def forward(self, x):
+    def forward(self, x, y):
         Gx= self.G(x)
         DGx = self.D(Gx)
-        Dx = self.D(x)
-        return Gx, DGx, Dx # All Netework expect Gx as their first output
+        Dy = self.D(y)
+        return Gx, DGx, Dy # All Netework expect Gx as their first output
     
     def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generator and Discriminator"""
@@ -540,11 +540,11 @@ class AEGAN (nn.Module):
         self.optimizer_G.zero_grad()
         
         # Forward pass
-        Gx, DGx, Dx = self(x)
+        Gx, DGx, Dy = self(x, y)
         
         # Generator losses
         loss_trans = self.loss_trans_fn(Gx, y)
-        loss_gan_g = self.loss_gan_gen_fn(Dx, DGx)
+        loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)
         loss_id = self.loss_identity_fn(x, y, Gx, y)  # Simplified identity
         
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
@@ -557,7 +557,7 @@ class AEGAN (nn.Module):
         self.optimizer_D.zero_grad()
         
         # Discriminator loss (reuse forward outputs)
-        D_loss = self.loss_gan_disc_fn(Dx, DGx.detach())
+        D_loss = self.loss_gan_disc_fn(Dy, DGx.detach())
         
         # Backward and optimize
         D_loss.backward()
@@ -596,14 +596,14 @@ class AEGAN (nn.Module):
             y = batch['y']
             
             # Forward pass
-            Gx, DGx, Dx = self(x)
+            Gx, DGx, Dy = self(x, y)
             
             # Compute losses
             loss_trans = self.loss_trans_fn(Gx, y)
-            loss_gan_g = self.loss_gan_gen_fn(Dx, DGx)
+            loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)
             loss_id = self.loss_identity_fn(x, y, Gx, y)
             G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-            D_loss = self.loss_gan_disc_fn(Dx, DGx)
+            D_loss = self.loss_gan_disc_fn(Dy, DGx)
             
             # Return metrics
             return {
@@ -625,11 +625,11 @@ class VAEGAN (nn.Module):
         self.D = Discriminator()
         self.latent_dim = latent_dim
 
-    def forward(self, x):
+    def forward(self, x, y):
         Gx, mu, logvar = self.G(x)  # output of the VAE
         DGx = self.D(Gx)  # Discriminator output for generated data
-        Dx = self.D(x)  # Discriminator output for real data
-        return Gx, mu, logvar, DGx, Dx # All Netework expect Gx as their first output
+        Dy = self.D(y)  # Discriminator output for real data
+        return Gx, mu, logvar, DGx, Dy # All Netework expect Gx as their first output
     
     def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generator and Discriminator"""
@@ -688,11 +688,11 @@ class VAEGAN (nn.Module):
         self.optimizer_G.zero_grad()
         
         # Forward pass
-        Gx, mu, logvar, DGx, Dx = self(x)
+        Gx, mu, logvar, DGx, Dy = self(x, y)
         
         # Generator losses
         loss_trans = self.translation_loss(Gx, y)
-        loss_gan = self.gan_loss_gen(Dx, DGx)
+        loss_gan = self.gan_loss_gen(Dy, DGx)
         loss_id = self.identity_loss(x, y, Gx, y)  # Simplified identity
         loss_kl = self.kl_loss(mu, logvar)
         G_loss = (loss_trans + self.lambda_gan * loss_gan +
@@ -706,7 +706,7 @@ class VAEGAN (nn.Module):
         self.optimizer_D.zero_grad()
         
         # Discriminator loss (reuse forward outputs)
-        D_loss = self.gan_loss_disc(Dx, DGx.detach())
+        D_loss = self.gan_loss_disc(Dy, DGx.detach())
         
         # Backward and optimize
         D_loss.backward()
@@ -738,7 +738,7 @@ class VAEGAN (nn.Module):
             y = batch['y']
             
             # Forward pass
-            Gx, mu, logvar, DGx, Dx = self(x)
+            Gx, mu, logvar, DGx, Dx = self(x, y)
             
             # Compute losses
             loss_trans = self.translation_loss(Gx, y)
@@ -1793,7 +1793,8 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
 
     aegan = AEGAN().to(device) # There's no latent dim for AEGAN
-    Gx, DGx, Dx = aegan(x)
+    y = torch.randn((10, 3, 256, 256)).to(device)
+    Gx, DGx, Dy = aegan(x, y)
     print("AEGAN Reconstructed shape:", Gx.shape)    # AEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
     print("AEGAN Discriminator output shape:", DGx.shape)    # AEGAN Discriminator output shape: torch.Size([10])
 
@@ -1802,7 +1803,7 @@ if __name__ == "__main__":
     torch.cuda.empty_cache()
 
     vaegan = VAEGAN(latent_dim=64).to(device)
-    Gx, mu, logvar,DGx, Dx, = vaegan(x)
+    Gx, mu, logvar, DGx, Dy = vaegan(x, y)
     print("VAEGAN Reconstructed shape:", Gx.shape)    # VAEGAN Reconstructed shape: torch.Size([10, 3, 256, 256])
     print("VAEGAN Discriminator output shape:", DGx.shape)    # VAEGAN Discriminator output shape: torch.Size([10]) -> see comment in Discriminator forward method
 

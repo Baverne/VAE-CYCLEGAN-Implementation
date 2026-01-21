@@ -127,11 +127,11 @@ def train_epoch(model, dataloader, device, args):
         last_x = batch['x']
         last_y = batch['y']
         with torch.no_grad():
-            # Cycle-based models need (x, y), others only need x
-            if args.architecture.startswith('cycle'):
-                last_output = model(last_x, last_y)[0]
-            else:
+            # Autoencoder and VAE only need x, others need both x and y
+            if isinstance(model, (Autoencoder, VariationalAutoencoder)):
                 last_output = model(last_x)[0]
+            else:
+                last_output = model(last_x, last_y)[0]
     
     # Average losses
     avg_loss = total_loss / len(dataloader)
