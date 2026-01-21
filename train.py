@@ -19,6 +19,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 import json
+import glob
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -82,17 +83,79 @@ def load_checkpoint(model, filename, device):
     if os.path.exists(filename):
         checkpoint = torch.load(filename, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
-        
+
         # Load optimizer state(s)
         if 'optimizer_states' in checkpoint:
             model.load_optimizer_states(checkpoint['optimizer_states'])
-        
+
         epoch = checkpoint['epoch']
         loss = checkpoint['loss']
         print(f"Loaded checkpoint from {filename} (epoch {epoch}, loss {loss:.4f})")
         return epoch, loss
     else:
         raise FileNotFoundError(f"No checkpoint found at {filename}")
+
+
+def truncate_tensorboard_events(tensorboard_dir, max_epoch):
+    """
+    Truncate TensorBoard events to keep only events up to max_epoch.
+    This allows resuming training from a checkpoint without duplicate/divergent curves.
+    """
+    from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+    tensorboard_dir = Path(tensorboard_dir)
+    event_files = sorted(glob.glob(str(tensorboard_dir / "events.out.tfevents.*")))
+
+    if not event_files:
+        print("No TensorBoard event files found, nothing to truncate")
+        return
+
+    # Load all events using EventAccumulator
+    ea = EventAccumulator(str(tensorboard_dir))
+    ea.Reload()
+
+    # Collect all scalar data up to max_epoch
+    scalars_to_keep = {}
+    for tag in ea.Tags().get('scalars', []):
+        events = ea.Scalars(tag)
+        scalars_to_keep[tag] = [(e.step, e.value) for e in events if e.step <= max_epoch]
+
+    # Collect all image data up to max_epoch
+    images_to_keep = {}
+    for tag in ea.Tags().get('images', []):
+        events = ea.Images(tag)
+        images_to_keep[tag] = [(e.step, e.encoded_image_string, e.width, e.height) for e in events if e.step <= max_epoch]
+
+    # Remove old event files
+    for event_file in event_files:
+        os.remove(event_file)
+        print(f"Removed old TensorBoard event file: {event_file}")
+
+    # Rewrite events using a new SummaryWriter
+    writer = SummaryWriter(log_dir=str(tensorboard_dir))
+
+    # Rewrite scalars
+    for tag, events in scalars_to_keep.items():
+        for step, value in events:
+            writer.add_scalar(tag, value, step)
+
+    # Rewrite images
+    for tag, events in images_to_keep.items():
+        for step, encoded_image, width, height in events:
+            # Decode and add image
+            import io
+            from PIL import Image
+            import numpy as np
+            img = Image.open(io.BytesIO(encoded_image))
+            img_array = np.array(img)
+            # TensorBoard expects (H, W, C) for add_image with dataformats='HWC'
+            writer.add_image(tag, img_array, step, dataformats='HWC')
+
+    writer.close()
+
+    kept_scalars = sum(len(v) for v in scalars_to_keep.values())
+    kept_images = sum(len(v) for v in images_to_keep.values())
+    print(f"Truncated TensorBoard logs to epoch {max_epoch}: kept {kept_scalars} scalar events and {kept_images} image events")
 
 
 def train_epoch(model, dataloader, device, args):
@@ -330,12 +393,20 @@ def main(args):
             json.dump(vars(args), f, indent=2)
         print(f"Output directory: {output_dir}")
     
-    # Create TensorBoard writer
+    # If resuming, truncate TensorBoard events to the checkpoint epoch
     tensorboard_dir = output_dir / 'tensorboard'
+    resume_epoch = None
+    if args.resume:
+        # Peek at checkpoint to get epoch before truncating TensorBoard
+        checkpoint = torch.load(args.resume, map_location='cpu')
+        resume_epoch = checkpoint['epoch']
+        truncate_tensorboard_events(tensorboard_dir, resume_epoch)
+
+    # Create TensorBoard writer
     writer = SummaryWriter(log_dir=tensorboard_dir)
     print(f"TensorBoard logs: {tensorboard_dir}")
     print(f"Run 'tensorboard --logdir={tensorboard_dir}' to visualize")
-    
+
     # Create dataloaders (paired or unpaired)
     if args.unpaired:
         train_loader, test_loader = create_dataloaders_unpaired(args)
