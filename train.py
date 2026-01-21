@@ -321,8 +321,9 @@ def main(args):
         print(f"Resuming run in directory: {output_dir}")
     else:
         # Create new output directory with timestamp
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}"
+        type_data = "unpaired" if args.unpaired else "paired"
+        timestamp = datetime.now().strftime('%m%d_%H%M')
+        output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}_{args.source_modality}_to_{args.target_modality}_{type_data}"
         output_dir.mkdir(parents=True, exist_ok=True)
         # Save arguments only for new runs
         with open(output_dir / 'args.json', 'w') as f:
