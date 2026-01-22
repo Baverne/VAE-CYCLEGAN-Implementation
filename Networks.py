@@ -216,7 +216,8 @@ class Discriminator (nn.Module):
         layers.append(CaSb(128, 256, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(256, 512, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(nn.Conv2d(512, 1, kernel_size=16, stride=1, padding=0))  # On your figure you put 2 as output channels whereas here it's 1 ?
-        
+        layers.append(nn.Sigmoid())  # Bound output to [0,1] for numerical stability
+
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -293,6 +294,7 @@ class Autoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -408,6 +410,7 @@ class VariationalAutoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -472,9 +475,10 @@ class AEGAN (nn.Module):
 
     def forward(self, x, y):
         Gx= self.G(x)
+        Gy= self.G(y)  # Added to compute identity loss
         DGx = self.D(Gx)
         Dy = self.D(y)
-        return Gx, DGx, Dy # All Netework expect Gx as their first output
+        return Gx, Gy, DGx, Dy # All Network expect Gx as their first output
     
     def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generator and Discriminator"""
@@ -510,7 +514,7 @@ class AEGAN (nn.Module):
         self.loss_trans_fn = TranslationLoss()
         self.loss_gan_gen_fn = GANLossGenerator()
         self.loss_gan_disc_fn = GANLossDiscriminator()
-        self.loss_identity_fn = IdentityLoss()
+        self.loss_identity_fn = nn.L1Loss()  # Identity loss as L1 loss between Gy and y
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
     
@@ -540,29 +544,33 @@ class AEGAN (nn.Module):
         self.optimizer_G.zero_grad()
         
         # Forward pass
-        Gx, DGx, Dy = self(x, y)
+        Gx, Gy, DGx, Dy = self(x, y)
         
         # Generator losses
         loss_trans = self.loss_trans_fn(Gx, y)
-        loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)
-        loss_id = self.loss_identity_fn(x, y, Gx, y)  # Simplified identity
+
+        loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
+        
+        loss_id = self.loss_identity_fn(Gy, y)  # Identity loss: G(y) should be close to y
         
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-        
+
         # Backward and optimize
         G_loss.backward(retain_graph=True)
+        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
-        
+
         ### Train Discriminator
         self.optimizer_D.zero_grad()
-        
+
         # Discriminator loss (reuse forward outputs)
         D_loss = self.loss_gan_disc_fn(Dy, DGx.detach())
-        
+
         # Backward and optimize
         D_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         self.optimizer_D.step()
-        
+
         # Return metrics
         return {
             'G_loss': G_loss.item(),
@@ -596,12 +604,14 @@ class AEGAN (nn.Module):
             y = batch['y']
             
             # Forward pass
-            Gx, DGx, Dy = self(x, y)
+            Gx, Gy, DGx, Dy = self(x, y)
             
             # Compute losses
             loss_trans = self.loss_trans_fn(Gx, y)
-            loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)
-            loss_id = self.loss_identity_fn(x, y, Gx, y)
+            loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
+
+            loss_id = self.loss_identity_fn(Gy, y)
+            
             G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
             D_loss = self.loss_gan_disc_fn(Dy, DGx)
             
@@ -697,19 +707,21 @@ class VAEGAN (nn.Module):
         loss_kl = self.kl_loss(mu, logvar)
         G_loss = (loss_trans + self.lambda_gan * loss_gan +
                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
-        
+
         # Backward and optimize
         G_loss.backward(retain_graph=True)  # retain_graph to reuse for D
+        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
 
         ### Train Discriminator
         self.optimizer_D.zero_grad()
-        
+
         # Discriminator loss (reuse forward outputs)
         D_loss = self.gan_loss_disc(Dy, DGx.detach())
-        
+
         # Backward and optimize
         D_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         self.optimizer_D.step()
 
         # Return metrics
@@ -821,12 +833,13 @@ class CycleAE (nn.Module):
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
         loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
         total_loss = loss_cycle + loss_trans
-        
+
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
@@ -937,8 +950,9 @@ class CycleVAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
@@ -1065,8 +1079,9 @@ class CycleAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
@@ -1074,7 +1089,7 @@ class CycleAEGAN (nn.Module):
             'loss_gan_g': loss_gan_g.item(),
             'loss_identity': loss_identity.item(),
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for CycleAEGAN
@@ -1205,8 +1220,9 @@ class CycleVAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
@@ -1215,7 +1231,7 @@ class CycleVAEGAN (nn.Module):
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for CycleVAEGAN
@@ -1328,6 +1344,7 @@ class CycleAE_unpaired(nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1433,14 +1450,16 @@ class CycleVAE_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
             'loss_cycle': loss_cycle.item(),
             'loss_kl': loss_kl.item(),
         }
+
     def validation_step(self, batch):
         """
         Validation step for CycleVAE unpaired
@@ -1549,8 +1568,9 @@ class CycleAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
@@ -1676,8 +1696,9 @@ class CycleVAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
-        
+
         # Return metrics
         return {
             'total_loss': total_loss.item(),
