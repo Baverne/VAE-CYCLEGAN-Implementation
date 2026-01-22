@@ -71,7 +71,8 @@ class GANLossGenerator(nn.Module):
         # D(y)^2 + (1 - D(G(x)))^2
         real_loss = self.mse_loss(D_real, torch.zeros_like(D_real))
         fake_loss = self.mse_loss(D_fake, torch.ones_like(D_fake))
-        return real_loss + fake_loss
+        total_loss = real_loss + fake_loss
+        return total_loss, real_loss, fake_loss
 
 
 class GANLossDiscriminator(nn.Module):
@@ -89,7 +90,8 @@ class GANLossDiscriminator(nn.Module):
         # (1 - D(x))^2 + D(G(x))^2
         real_loss = self.mse_loss(D_real, torch.ones_like(D_real))
         fake_loss = self.mse_loss(D_fake, torch.zeros_like(D_fake))
-        return real_loss + fake_loss
+        total_loss = real_loss + fake_loss
+        return total_loss, real_loss, fake_loss
 
 
 class KLDivergenceLoss(nn.Module):

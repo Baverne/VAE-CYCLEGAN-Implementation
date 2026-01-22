@@ -175,11 +175,13 @@ class Decoder (nn.Module):
         layers.append(U(512, 256))
         layers.append(U(256, 128))
         layers.append(U(128, 64))
-        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Sigmoid activation to have output in [0,1]
+        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Identity activation
         self.model = nn.Sequential(*layers)
 
     def forward(self, x):
-        return self.model(x)
+        out = self.model(x)
+        # Clamp output to [0, 1] for numerical stability (prevents L1 loss explosion)
+        return torch.clamp(out, 0, 1)
 
 class VariationalEncoderBlock (nn.Module):
     def __init__(self, in_channels, latent_dim=64):
@@ -294,7 +296,7 @@ class Autoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -410,7 +412,7 @@ class VariationalAutoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -549,34 +551,37 @@ class AEGAN (nn.Module):
         # Generator losses
         loss_trans = self.loss_trans_fn(Gx, y)
 
-        loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
-        
+        loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
+
         loss_id = self.loss_identity_fn(Gy, y)  # Identity loss: G(y) should be close to y
-        
+
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
 
         # Backward and optimize
         G_loss.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
 
         ### Train Discriminator
         self.optimizer_D.zero_grad()
 
         # Discriminator loss (reuse forward outputs)
-        D_loss = self.loss_gan_disc_fn(Dy, DGx.detach())
+        D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy, DGx.detach())
 
         # Backward and optimize
         D_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
+
         self.optimizer_D.step()
 
         # Return metrics
         return {
             'G_loss': G_loss.item(),
             'D_loss': D_loss.item(),
+            'D_loss_real': D_loss_real.item(),
+            'D_loss_fake': D_loss_fake.item(),
             'loss_trans': loss_trans.item(),
             'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g_real': loss_gan_g_real.item(),
+            'loss_gan_g_fake': loss_gan_g_fake.item(),
             'loss_identity': loss_id.item()
         }
     
@@ -608,20 +613,24 @@ class AEGAN (nn.Module):
             
             # Compute losses
             loss_trans = self.loss_trans_fn(Gx, y)
-            loss_gan_g = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
+            loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
 
             loss_id = self.loss_identity_fn(Gy, y)
-            
+
             G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-            D_loss = self.loss_gan_disc_fn(Dy, DGx)
-            
+            D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy, DGx)
+
             # Return metrics
             return {
                 'total_loss': (G_loss.item() + D_loss.item()),
                 'G_loss': G_loss.item(),
                 'D_loss': D_loss.item(),
+                'D_loss_real': D_loss_real.item(),
+                'D_loss_fake': D_loss_fake.item(),
                 'loss_trans': loss_trans.item(),
                 'loss_gan_g': loss_gan_g.item(),
+                'loss_gan_g_real': loss_gan_g_real.item(),
+                'loss_gan_g_fake': loss_gan_g_fake.item(),
                 'loss_identity': loss_id.item(),
                 'output': Gx
             }
@@ -702,34 +711,36 @@ class VAEGAN (nn.Module):
         
         # Generator losses
         loss_trans = self.translation_loss(Gx, y)
-        loss_gan = self.gan_loss_gen(Dy, DGx)
+        total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dy, DGx)
         loss_id = self.identity_loss(x, y, Gx, y)  # Simplified identity
         loss_kl = self.kl_loss(mu, logvar)
-        G_loss = (loss_trans + self.lambda_gan * loss_gan +
+        G_loss = (loss_trans + self.lambda_gan * total_loss_gan +
                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
 
         # Backward and optimize
         G_loss.backward(retain_graph=True)  # retain_graph to reuse for D
-        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
 
         ### Train Discriminator
         self.optimizer_D.zero_grad()
 
         # Discriminator loss (reuse forward outputs)
-        D_loss = self.gan_loss_disc(Dy, DGx.detach())
+        total_loss_gan_disc, loss_gan_real_disc, loss_gan_fake_disc = self.gan_loss_disc(Dy, DGx.detach())
 
         # Backward and optimize
-        D_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
+        total_loss_gan_disc.backward()
+        
         self.optimizer_D.step()
 
         # Return metrics
         return {
             'G_loss': G_loss.item(),
-            'D_loss': D_loss.item(),
+            'D_loss': total_loss_gan_disc.item(),
+            'loss_gan_disc_real': loss_gan_real_disc.item(),
+            'loss_gan_disc_fake': loss_gan_fake_disc.item(),
             'loss_trans': loss_trans.item(),
-            'loss_gan': loss_gan.item(),
+            'loss_gan_real': loss_gan_real.item(),
+            'loss_gan_fake': loss_gan_fake.item(),
             'loss_identity': loss_id.item(),
             'loss_kl': loss_kl.item(),
         }
@@ -754,19 +765,20 @@ class VAEGAN (nn.Module):
             
             # Compute losses
             loss_trans = self.translation_loss(Gx, y)
-            loss_gan = self.gan_loss_gen(Dx, DGx)
+            total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dx, DGx)
             loss_id = self.identity_loss(x, y, Gx, y)
             loss_kl = self.kl_loss(mu, logvar)
-            G_loss = (loss_trans + self.lambda_gan * loss_gan +
+            G_loss = (loss_trans + self.lambda_gan * total_loss_gan +
                     self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
-            D_loss = self.gan_loss_disc(Dx, DGx)
+            total_loss_gan_disc, loss_gan_real_disc, loss_gan_fake_disc = self.gan_loss_disc(Dx, DGx)
             # Return metrics
             return {
-                'total_loss': (G_loss.item() + D_loss.item()),
+                'total_loss': (G_loss.item() + total_loss_gan_disc.item()),
                 'G_loss': G_loss.item(),
-                'D_loss': D_loss.item(),
+                'D_loss': total_loss_gan_disc.item(),
                 'loss_trans': loss_trans.item(),
-                'loss_gan': loss_gan.item(),
+                'loss_gan_real': loss_gan_real.item(),
+                'loss_gan_fake': loss_gan_fake.item(),
                 'loss_identity': loss_id.item(),
                 'loss_kl': loss_kl.item(),
                 'output': Gx
@@ -837,7 +849,7 @@ class CycleAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -950,7 +962,7 @@ class CycleVAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -1068,10 +1080,11 @@ class CycleAEGAN (nn.Module):
 
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-        loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
-                      self.loss_gan_gen(self.DY(y), DYGx))
+        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
+        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+        loss_gan_g = loss_gan_g_x + loss_gan_g_y
         loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
-        
+
         total_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g +
                       self.lambda_identity * loss_identity)
@@ -1079,7 +1092,7 @@ class CycleAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Return metrics
@@ -1087,6 +1100,10 @@ class CycleAEGAN (nn.Module):
             'total_loss': total_loss.item(),
             'loss_cycle': loss_cycle.item(),
             'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
         }
 
@@ -1110,17 +1127,22 @@ class CycleAEGAN (nn.Module):
 
             # Compute losses
             loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-            loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
-                          self.loss_gan_gen(self.DY(y), DYGx))
+            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
+            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+            loss_gan_g = loss_gan_g_x + loss_gan_g_y
             loss_identity = self.loss_identity(x, y, Gx, y) + self.loss_identity(y, x, Fy, x)
             total_loss = (self.lambda_cycle * loss_cycle +
                           self.lambda_gan * loss_gan_g +
-                            self.lambda_identity * loss_identity)
-            
+                          self.lambda_identity * loss_identity)
+
             # Return metrics
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
+                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
                 'output' : Gx.detach()  # For compatibility, return Gx as output ???????
@@ -1205,13 +1227,14 @@ class CycleVAEGAN (nn.Module):
 
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-        loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
-                      self.loss_gan_gen(DYy, DYGx))
+        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
+        loss_gan_g = loss_gan_g_x + loss_gan_g_y
         loss_identity = (self.loss_identity(x, y, FGx, GFy) +
                          self.loss_identity(y, x, GFy, FGx))
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-        
+
         total_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g +
                       self.lambda_identity * loss_identity +
@@ -1220,7 +1243,7 @@ class CycleVAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Return metrics
@@ -1228,6 +1251,10 @@ class CycleVAEGAN (nn.Module):
             'total_loss': total_loss.item(),
             'loss_cycle': loss_cycle.item(),
             'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
         }
@@ -1256,27 +1283,32 @@ class CycleVAEGAN (nn.Module):
             
             # Compute losses
             loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-            loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
-                          self.loss_gan_gen(DYy, DYGx))
+            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
+            loss_gan_g = loss_gan_g_x + loss_gan_g_y
             loss_identity = (self.loss_identity(x, y, FGx, GFy) +
                              self.loss_identity(y, x, GFy, FGx))
-            
+
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                         self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-            
+
             total_loss = (self.lambda_cycle * loss_cycle +
                           self.lambda_gan * loss_gan_g +
                           self.lambda_identity * loss_identity +
                           self.lambda_kl * loss_kl)
-            
+
             # Return metrics
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
+                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
                 'loss_identity': loss_identity.item(),
                 'loss_kl': loss_kl.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
+                'output' : Gx.detach()
             }
 
 ### Unpaired Datasets Networks ###
@@ -1344,7 +1376,7 @@ class CycleAE_unpaired(nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -1450,7 +1482,7 @@ class CycleVAE_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
         self.optimizer.step()
 
         # Return metrics
@@ -1559,16 +1591,17 @@ class CycleAEGAN_unpaired (nn.Module):
 
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-        loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
-                      self.loss_gan_gen(self.DY(y), DYGx))
-        
+        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
+        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+        loss_gan_g = loss_gan_g_x + loss_gan_g_y
+
         total_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g)
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Return metrics
@@ -1576,6 +1609,10 @@ class CycleAEGAN_unpaired (nn.Module):
             'total_loss': total_loss.item(),
             'loss_cycle': loss_cycle.item(),
             'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
         }
 
     def validation_step(self, batch):
@@ -1597,17 +1634,22 @@ class CycleAEGAN_unpaired (nn.Module):
 
             # Compute losses
             loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-            loss_gan_g = (self.loss_gan_gen(self.DX(x), DXFy) +
-                          self.loss_gan_gen(self.DY(y), DYGx))
+            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
+            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+            loss_gan_g = loss_gan_g_x + loss_gan_g_y
             total_loss = (self.lambda_cycle * loss_cycle +
                           self.lambda_gan * loss_gan_g)
-            
+
             # Return metrics
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
+                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
+                'output' : Gx.detach()
             }
 
 
@@ -1684,11 +1726,12 @@ class CycleVAEGAN_unpaired (nn.Module):
 
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-        loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
-                      self.loss_gan_gen(DYy, DYGx))
+        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
+        loss_gan_g = loss_gan_g_x + loss_gan_g_y
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-        
+
         total_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g +
                       self.lambda_kl * loss_kl)
@@ -1696,7 +1739,7 @@ class CycleVAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Return metrics
@@ -1704,6 +1747,10 @@ class CycleVAEGAN_unpaired (nn.Module):
             'total_loss': total_loss.item(),
             'loss_cycle': loss_cycle.item(),
             'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_kl': loss_kl.item(),
         }
 
@@ -1730,21 +1777,26 @@ class CycleVAEGAN_unpaired (nn.Module):
             
             # Compute losses
             loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-            loss_gan_g = (self.loss_gan_gen(DXx, DXFy) +
-                          self.loss_gan_gen(DYy, DYGx))
+            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
+            loss_gan_g = loss_gan_g_x + loss_gan_g_y
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                         self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
             total_loss = (self.lambda_cycle * loss_cycle +
-                            self.lambda_gan * loss_gan_g +
-                            self.lambda_kl * loss_kl)
-            
+                          self.lambda_gan * loss_gan_g +
+                          self.lambda_kl * loss_kl)
+
             # Return metrics
             return {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
                 'loss_gan_g': loss_gan_g.item(),
+                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
+                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
+                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
+                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
                 'loss_kl': loss_kl.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
+                'output' : Gx.detach()
             }
 
 if __name__ == "__main__":
