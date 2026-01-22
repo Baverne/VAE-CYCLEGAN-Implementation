@@ -168,21 +168,34 @@ def train_epoch(model, dataloader, device, args):
     last_y = None
     
     pbar = tqdm(dataloader, desc='Training')
+    nan_count = 0
     for batch_idx, batch in enumerate(pbar):
         # Prepare batch (move to device)
         batch['x'] = batch['x'].to(device)
         batch['y'] = batch['y'].to(device)
-        
+
         # Model handles : forward, loss, backward, optimizer step
         metrics = model.training_step(batch)
-        
+
+        # Check for NaN/Inf in losses
+        has_nan = any(
+            (isinstance(v, float) and (v != v or abs(v) == float('inf')))  # NaN or Inf check
+            for v in metrics.values()
+        )
+        if has_nan:
+            nan_count += 1
+            print(f"\nWARNING: NaN/Inf detected in batch {batch_idx}, skipping accumulation (total NaN batches: {nan_count})")
+            if nan_count >= 10:
+                raise RuntimeError(f"Too many NaN batches ({nan_count}). Training is unstable. Consider lowering learning rate or checking data.")
+            continue
+
         # Track losses
         total_loss += metrics['G_loss']
         for key, value in metrics.items():
             if key not in loss_components:
                 loss_components[key] = 0.0
             loss_components[key] += value
-        
+
         # Update progress bar
         pbar.set_postfix({'loss': metrics['G_loss']})
         
@@ -195,11 +208,16 @@ def train_epoch(model, dataloader, device, args):
                 last_output = model(last_x)[0]
             else:
                 last_output = model(last_x, last_y)[0]
-    
-    # Average losses
-    avg_loss = total_loss / len(dataloader)
-    avg_loss_components = {k: v / len(dataloader) for k, v in loss_components.items()}
-    
+
+    # Average losses (account for skipped NaN batches)
+    valid_batches = len(dataloader) - nan_count
+    if valid_batches > 0:
+        avg_loss = total_loss / valid_batches
+        avg_loss_components = {k: v / valid_batches for k, v in loss_components.items()}
+    else:
+        avg_loss = float('nan')
+        avg_loss_components = {k: float('nan') for k in loss_components.keys()}
+
     return avg_loss, avg_loss_components, last_output, last_x, last_y
 
 
@@ -374,6 +392,9 @@ def main(args):
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     print(f"Using device: {device}")
+    if device.type == 'cpu':
+        print("WARNING: You are using CPU for training. This will be very slow. Consider using a GPU if available.")
+        input("Press Enter to continue or Ctrl+C to abort...")
     
     # Determine output directory: if resuming, continue in the checkpoint directory
     if args.resume:
@@ -485,20 +506,17 @@ def main(args):
             writer.add_images(f'{args.source_modality}/test_input', test_x_vis, epoch)
             writer.add_images(f'{args.target_modality}/test_target', test_y_vis, epoch)
             writer.add_images(f'{args.target_modality}/test_output', test_output_vis, epoch)
-        else:
-            test_loss = train_loss
+            # Save best model
+            if test_loss < best_test_loss:
+                best_test_loss = test_loss
+                best_path = output_dir / "best_model.pth"
+                save_checkpoint(model, epoch, test_loss, args, best_path)
+                print(f"New best model saved (test_loss: {test_loss:.4f})")
         
         # Save checkpoint
         if (epoch + 1) % args.save_freq == 0:
             checkpoint_path = output_dir / f"checkpoint_epoch_{epoch + 1}.pth"
-            save_checkpoint(model, epoch, train_loss, args, checkpoint_path)
-        
-        # Save best model
-        if test_loss < best_test_loss:
-            best_test_loss = test_loss
-            best_path = output_dir / "best_model.pth"
-            save_checkpoint(model, epoch, test_loss, args, best_path)
-            print(f"New best model saved (test_loss: {test_loss:.4f})")
+            save_checkpoint(model, epoch, train_loss, args, checkpoint_path)    
     
     # Close TensorBoard writer
     writer.close()
