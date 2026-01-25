@@ -336,79 +336,74 @@ class UnpairedImageDataset(Dataset):
 
 
 if __name__ == "__main__":
-    """
-    # Basic usage without transforms
+    import torchvision.utils as vutils
 
-    dataset = HypersimDataset(
-        root_dir='datasets',
-        modalities=['color','depth','normal_world','normal','semantic','semantic_instance','normal'],
-        return_scene_info=True
-    )
-    
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-    
-    for batch in dataloader:
-        print(f"Batch keys: {batch.keys()}")
-        print(f"depth shape: {batch['depth'].shape}")
-        print(f"semantic shape: {batch['semantic'].shape}")
-        print(f"normal shape: {batch['normal'].shape}")
-        print(f"scene_num: {batch['scene_num']}")
-        print(f"scene_type: {batch['scene_type']}")
-        print(f"cam_num: {batch['cam_num']}")
-        print(f"frame_id: {batch['frame_id']}")
-        print(f"color max min : {batch['color'].min()} , {batch['color'].max()}")
-        print(f"depth max min : {batch['depth'].min()} , {batch['depth'].max()}")
-        print(f"semantic max min : {batch['semantic'].min()} , {batch['semantic'].max()}")
-        break
-    """
-    # Example 2: With data augmentation transforms
-    
-    # Define augmentation transform for general modalities (depth, semantic, normal)
+    # Create output directory for input examples
+    output_dir = Path("input_examples")
+    output_dir.mkdir(exist_ok=True)
+
+    # Define transform with augmentation
     general_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.3),
         transforms.RandomRotation(degrees=15),
         transforms.RandomResizedCrop(size=256, scale=(0.33, 1.0), ratio=(1,1), interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.ToTensor(),
     ])
-    
-    # Define augmentation transform specifically for color/color images
+
+    # Define color-specific transform
     color_transform = transforms.Compose([
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
     ])
-    
-    # Create dataset with transforms
-    dataset_augmented = HypersimDataset(
-        root_dir='datasets',
-        modalities=['depth', 'semantic', 'normal'],
+
+    # Create dataset in paired mode (x=depth, y=normal)
+    dataset = HypersimDataset(
+        root_dir='datasets/paired',
+        modalities=['depth', 'normal'],
         transform=general_transform,
-        color_transform=color_transform, 
-        return_scene_info=True
+        color_transform=color_transform,
+        return_scene_info=True,
+        paired_mode=True
     )
-    
-    dataloader_augmented = DataLoader(dataset_augmented, batch_size=4, shuffle=True)
-    
-    batch = next(iter(dataloader_augmented))
-    print(f"Augmented batch - depth range: [{batch['depth'].min():.3f}, {batch['depth'].max():.3f}]")
-    print(f"Augmented batch - semantic range: [{batch['semantic'].min():.3f}, {batch['semantic'].max():.3f}]")
-    print(f"Shape: {batch['depth'].shape}")
-    
-    # Example 3: Minimal transform (just normalization)
-    
-    # Minimal transform without augmentation
-    simple_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
-    
-    dataset_simple = HypersimDataset(
-        root_dir='datasets',
-        modalities=['depth', 'semantic', 'normal'],
-        transform=simple_transform,
-        return_scene_info=True
-    )
-    
-    dataloader_simple = DataLoader(dataset_simple, batch_size=2, shuffle=False)
-    batch = next(iter(dataloader_simple))
-    print(f"Simple transform - batch shape: {batch['depth'].shape}")
-    print(f"Value range (normalized): [{batch['depth'].min():.3f}, {batch['depth'].max():.3f}]")
+
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+
+    batch = next(iter(dataloader))
+
+    # Show x and y shapes
+    print(f"\n{'='*50}")
+    print(f"Paired Mode - X and Y Shapes")
+    print(f"{'='*50}")
+    print(f"X (input) shape:  {batch['x'].shape}")
+    print(f"Y (target) shape: {batch['y'].shape}")
+    print(f"X value range: [{batch['x'].min():.3f}, {batch['x'].max():.3f}]")
+    print(f"Y value range: [{batch['y'].min():.3f}, {batch['y'].max():.3f}]")
+    print(f"Scene: {batch['scene_num']}")
+    print(f"Frame: {batch['frame_id']}")
+
+    # Save x and y images as PNG
+    # Save first sample from batch
+    x_img = batch['x'][0]  # Shape: [C, H, W]
+    y_img = batch['y'][0]
+
+    # Save individual images
+    vutils.save_image(x_img, output_dir / "x_sample.png")
+    vutils.save_image(y_img, output_dir / "y_sample.png")
+
+    # Save grid of all batch samples
+    vutils.save_image(batch['x'], output_dir / "x_batch_grid.png", nrow=2, normalize=True)
+    vutils.save_image(batch['y'], output_dir / "y_batch_grid.png", nrow=2, normalize=True)
+
+    # Save side-by-side comparison (x | y)
+    comparison = torch.cat([batch['x'], batch['y']], dim=3)  # Concatenate along width
+    vutils.save_image(comparison, output_dir / "xy_comparison.png", nrow=2, normalize=True)
+
+    print(f"\n{'='*50}")
+    print(f"Saved PNG images to '{output_dir}/':")
+    print(f"  - x_sample.png       (single X sample)")
+    print(f"  - y_sample.png       (single Y sample)")
+    print(f"  - x_batch_grid.png   (all X in batch)")
+    print(f"  - y_batch_grid.png   (all Y in batch)")
+    print(f"  - xy_comparison.png  (X|Y side-by-side)")
+    print(f"{'='*50}")
     
