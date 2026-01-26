@@ -158,7 +158,7 @@ def truncate_tensorboard_events(tensorboard_dir, max_epoch):
     print(f"Truncated TensorBoard logs to epoch {max_epoch}: kept {kept_scalars} scalar events and {kept_images} image events")
 
 
-def train_epoch(model, dataloader, device, args):
+def train_epoch(model, dataloader, device, args, writer=None, epoch=None):
     """Train for one epoch"""
     model.train()
     total_loss = 0.0
@@ -166,7 +166,7 @@ def train_epoch(model, dataloader, device, args):
     last_output = None
     last_x = None
     last_y = None
-    
+
     pbar = tqdm(dataloader, desc='Training')
     nan_count = 0
     for batch_idx, batch in enumerate(pbar):
@@ -176,18 +176,6 @@ def train_epoch(model, dataloader, device, args):
 
         # Model handles : forward, loss, backward, optimizer step
         metrics = model.training_step(batch)
-
-        # Check for NaN/Inf in losses
-        has_nan = any(
-            (isinstance(v, float) and (v != v or abs(v) == float('inf')))  # NaN or Inf check
-            for v in metrics.values()
-        )
-        if has_nan:
-            nan_count += 1
-            print(f"\nWARNING: NaN/Inf detected in batch {batch_idx}, skipping accumulation (total NaN batches: {nan_count})")
-            if nan_count >= 10:
-                raise RuntimeError(f"Too many NaN batches ({nan_count}). Training is unstable. Consider lowering learning rate or checking data.")
-            continue
 
         # Track losses
         total_loss += metrics['G_loss']
@@ -209,8 +197,8 @@ def train_epoch(model, dataloader, device, args):
             else:
                 last_output = model(last_x, last_y)[0]
 
-    # Average losses (account for skipped NaN batches)
-    valid_batches = len(dataloader) - nan_count
+    # Average losses
+    valid_batches = len(dataloader)
     if valid_batches > 0:
         avg_loss = total_loss / valid_batches
         avg_loss_components = {k: v / valid_batches for k, v in loss_components.items()}
@@ -395,6 +383,11 @@ def main(args):
     if device.type == 'cpu':
         print("WARNING: You are using CPU for training. This will be very slow. Consider using a GPU if available.")
         input("Press Enter to continue or Ctrl+C to abort...")
+
+    # Enable anomaly detection to find NaN source (disable for production - slows training)
+    if False:  # Set to True to enable
+        torch.autograd.set_detect_anomaly(True)
+        print("Anomaly detection enabled - will show exact operation if NaN occurs")
     
     # Determine output directory: if resuming, continue in the checkpoint directory
     if args.resume:
@@ -446,7 +439,6 @@ def main(args):
         lambda_gan=args.lambda_gan,
         lambda_identity=args.lambda_identity
     ) # We give all the lambdas even if not used by the architecture, the model will pick what it needs
-    
     print(f"Model configured with optimizers and loss functions")
     
     # Load checkpoint if resuming
@@ -469,16 +461,16 @@ def main(args):
         
         # Train
         train_loss, train_loss_components, train_output, train_x, train_y = train_epoch(
-            model, train_loader, device, args
+            model, train_loader, device, args, writer=writer, epoch=epoch
         )
         print(f"Train Loss: {train_loss:.4f}")
         for key, value in train_loss_components.items():
-            print(f"  {key}: {value:.4f}")
+            print(f"  {key}: {value:.6f}")
         
         # Log training metrics to TensorBoard
         writer.add_scalar('Loss/train', train_loss, epoch)
         for key, value in train_loss_components.items():
-            writer.add_scalar(f'Loss_Components/train_{key}', value, epoch)
+            writer.add_scalar(f'Loss_Components_train/{key}', value, epoch)
         
         
         # On test set
@@ -489,14 +481,14 @@ def main(args):
             print(f"Test Loss: {test_loss:.4f}")
             for key, value in test_loss_components.items():
                 try:
-                    print(f"  {key}: {value:.4f}")
+                    print(f"  {key}: {value:.6f}")
                 except Exception as e:
                     print(f"  {key}: {value} (could not format as float: {e})")
             
             # Log test metrics to TensorBoard
             writer.add_scalar('Loss/test', test_loss, epoch)
             for key, value in test_loss_components.items():
-                writer.add_scalar(f'Loss_Components/test_{key}', value, epoch)
+                writer.add_scalar(f'Loss_Components_test/{key}', value, epoch)
             
             # Log test images to TensorBoard
             test_x_vis = test_x[:4] * 0.5 + 0.5
@@ -566,8 +558,7 @@ if __name__ == '__main__':
                         help='GAN loss weight for AEGAN')
     parser.add_argument('--lambda_identity', type=float, default=5.0,
                         help='Identity loss weight for AEGAN')
-    
-    
+
     # Checkpointing and output
     parser.add_argument('--output_dir', type=str, default='runs',
                         help='Directory to save models and logs')
