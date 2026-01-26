@@ -46,6 +46,7 @@ Theses extra methods allow each network to have its own training and validation 
 
 import numpy as np
 import torch
+from torch.nn.utils import spectral_norm
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 import torch.nn as nn
@@ -128,7 +129,7 @@ class U (nn.Module):
         x = self.activation(x)  # ReLU BEFORE InstanceNorm
         x = self.norm(x)
         return x
-    
+
 class S (nn.Module):
     def __init__(self, in_channels, out_channels):
         super(S, self).__init__()
@@ -162,9 +163,22 @@ class Encoder (nn.Module):
         layers.append(R(1024))
         self.model = nn.Sequential(*layers)
 
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
     def forward(self, x):
         return self.model(x)
-
 
 class Decoder (nn.Module):
     def __init__(self):
@@ -178,10 +192,24 @@ class Decoder (nn.Module):
         layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Identity activation
         self.model = nn.Sequential(*layers)
 
+        self.apply(self._init_weights)
+
     def forward(self, x):
         out = self.model(x)
-        # Clamp output to [0, 1] for numerical stability (prevents L1 loss explosion)
         return torch.clamp(out, 0, 1)
+    
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
 
 class VariationalEncoderBlock (nn.Module):
     def __init__(self, in_channels, latent_dim=64):
@@ -217,10 +245,24 @@ class Discriminator (nn.Module):
         layers.append(CaSb(64, 128, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(128, 256, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
         layers.append(CaSb(256, 512, kernel_size=4, stride=2, padding=1, activation="LeakyReLU"))
-        layers.append(nn.Conv2d(512, 1, kernel_size=16, stride=1, padding=0))  # On your figure you put 2 as output channels whereas here it's 1 ?
-        layers.append(nn.Sigmoid())  # Bound output to [0,1] for numerical stability
+        layers.append(spectral_norm(nn.Conv2d(512, 1, kernel_size=16, stride=1, padding=0)))  # On your figure you put 2 as output channels whereas here it's 1 ?
 
         self.model = nn.Sequential(*layers)
+
+        # Apply proper weight initialization
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for LeakyReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='leaky_relu', a=0.2)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, x):
         #shape (B, 1, 1, 1) to (B,1)
@@ -241,6 +283,21 @@ class Autoencoder (nn.Module):
         # loss related attributes to be set in "configure_loss"
         self.optimizer = None
         self.loss_fn = None
+
+        # Apply proper weight initialization
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, x):
         z = self.encoder(x)
@@ -270,7 +327,7 @@ class Autoencoder (nn.Module):
     def configure_loss(self, **kwargs):
         """Configure loss functions (ignores unused kwargs)"""
         self.loss_fn = TranslationLoss()
-    
+
     def training_step(self, batch):
         """
         Training step for Autoencoder
@@ -286,17 +343,34 @@ class Autoencoder (nn.Module):
 
         x = batch['x']
         y = batch['y']
-        
+
         # Forward pass
         output = self(x)
 
         # Compute loss
         loss_trans = self.loss_fn(output, y)
 
+        # Check for NaN/Inf before backward
+        if torch.isnan(loss_trans) or torch.isinf(loss_trans):
+            print("NaN or Inf detected in loss during training step. Printing the actual weight of the network for debugging:")
+            for name, param in self.named_parameters():
+                if param.requires_grad:
+                    print(f"Parameter: {name}, Value: {param.data}")
+            print("printing all the computation graph values for debugging:")
+            self.optimizer.zero_grad()
+            for p in self.parameters():
+                if p.grad is not None:
+                    print(p.grad)
+            return {
+                'nan_detected': True,
+                'G_loss': float('nan'),
+                'loss_trans': float('nan'),
+                'total_loss': float('nan')
+            }
+
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -349,7 +423,22 @@ class VariationalAutoencoder (nn.Module):
         self.optimizer = None
         self.loss_trans_fn = None
         self.loss_kl_fn = None
-        self.lambda_kl = 0 
+        self.lambda_kl = 0
+
+        # Apply proper weight initialization
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, x):
         encoded = self.encoder(x)
@@ -357,18 +446,18 @@ class VariationalAutoencoder (nn.Module):
         decoded_latent = self.variational_decoder_block(z)
         Gx = self.decoder(decoded_latent)
         return Gx, mu, logvar # All Netework expect Gx as their first output
-    
+
     def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
         """Configure optimizer for training"""
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
         return self.optimizer
-    
+
     def save_optimizer_states(self):
         """Save optimizer states for checkpointing"""
         if self.optimizer is None:
             raise ValueError("Optimizer has not been configured yet.")
         return {'optimizer': self.optimizer.state_dict()}
-    
+
     def load_optimizer_states(self, states):
         """Load optimizer states from checkpoint"""
         if self.optimizer is None:
@@ -377,13 +466,13 @@ class VariationalAutoencoder (nn.Module):
             self.optimizer.load_state_dict(states['optimizer'])
         else :
             raise KeyError("optimizer state not found in states")
-    
+
     def configure_loss(self, **kwargs):
         """Configure loss functions"""
         self.loss_trans_fn = TranslationLoss()
         self.loss_kl_fn = KLDivergenceLoss()
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-    
+
     def training_step(self, batch):
         """
         Training step for VAE
@@ -412,7 +501,6 @@ class VariationalAutoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -465,6 +553,9 @@ class AEGAN (nn.Module):
         self.G = Autoencoder()
         self.D = Discriminator()
 
+        # Apply weight initialization (DCGAN style)
+        self.apply(weights_init)
+
         # loss related attributes to be set in "configure_loss"
         self.optimizer_G = None
         self.optimizer_D = None
@@ -475,13 +566,14 @@ class AEGAN (nn.Module):
         self.lambda_gan = 0
         self.lambda_identity = 0
 
+
     def forward(self, x, y):
-        Gx= self.G(x)
-        Gy= self.G(y)  # Added to compute identity loss
+        Gx = self.G(x)
+        Gy = self.G(y)
         DGx = self.D(Gx)
         Dy = self.D(y)
-        return Gx, Gy, DGx, Dy # All Network expect Gx as their first output
-    
+        return Gx, Gy, DGx, Dy
+
     def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generator and Discriminator"""
         self.optimizer_G = torch.optim.Adam(self.G.parameters(), lr=lr, betas=betas)
@@ -519,7 +611,7 @@ class AEGAN (nn.Module):
         self.loss_identity_fn = nn.L1Loss()  # Identity loss as L1 loss between Gy and y
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
-    
+
     def training_step(self, batch):
         """
         Training step for AEGAN (trains both G and D)
@@ -538,41 +630,43 @@ class AEGAN (nn.Module):
             raise ValueError("GAN discriminator loss function has not been configured yet.")
         if self.loss_identity_fn is None:
             raise ValueError("Identity loss function has not been configured yet.")
-        
+
         x = batch['x']
         y = batch['y']
-        
+
         ### Train Generator
         self.optimizer_G.zero_grad()
         
-        # Forward pass
-        Gx, Gy, DGx, Dy = self(x, y)
+        # Forward pass for generator training
+        Gx, Gy, DGx, Dy = self.forward(x, y)
         
-        # Generator losses
+        # Discriminator statistics
+        d_y_mean = Dy.mean().item()
+        d_gx_mean = DGx.mean().item()
+        
+        # Compute generator losses
         loss_trans = self.loss_trans_fn(Gx, y)
-
-        loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)  # GAN generator loss
-
-        loss_id = self.loss_identity_fn(Gy, y)  # Identity loss: G(y) should be close to y
-
+        loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)
+        loss_id = self.loss_identity_fn(Gy, y)
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-
-        # Backward and optimize
-        G_loss.backward(retain_graph=True)
+        
+        G_loss.backward()
         self.optimizer_G.step()
 
         ### Train Discriminator
         self.optimizer_D.zero_grad()
-
-        # Discriminator loss (reuse forward outputs)
-        D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy, DGx.detach())
-
-        # Backward and optimize
+        
+        # Forward pass for discriminator training (detach generator outputs)
+        Gx_detached = Gx.detach()  # Detach the generator output
+        DGx_detached = self.D(Gx_detached)
+        Dy_detached = self.D(y)
+        
+        # Compute discriminator loss
+        D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
+        
         D_loss.backward()
-
         self.optimizer_D.step()
 
-        # Return metrics
         return {
             'G_loss': G_loss.item(),
             'D_loss': D_loss.item(),
@@ -580,11 +674,11 @@ class AEGAN (nn.Module):
             'D_loss_fake': D_loss_fake.item(),
             'loss_trans': loss_trans.item(),
             'loss_gan_g': loss_gan_g.item(),
-            'loss_gan_g_real': loss_gan_g_real.item(),
-            'loss_gan_g_fake': loss_gan_g_fake.item(),
-            'loss_identity': loss_id.item()
+            'loss_identity': loss_id.item(),
+            'd_y_mean': d_y_mean,
+            'd_gx_mean': d_gx_mean
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for AEGAN
@@ -609,7 +703,7 @@ class AEGAN (nn.Module):
             y = batch['y']
             
             # Forward pass
-            Gx, Gy, DGx, Dy = self(x, y)
+            Gx, Gy, DGx, Dy = self.forward(x, y)
             
             # Compute losses
             loss_trans = self.loss_trans_fn(Gx, y)
@@ -617,6 +711,7 @@ class AEGAN (nn.Module):
 
             loss_id = self.loss_identity_fn(Gy, y)
 
+            # We only take the loss_gan_g_fake for G_loss
             G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
             D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy, DGx)
 
@@ -643,6 +738,7 @@ class VAEGAN (nn.Module):
         self.G = VariationalAutoencoder(latent_dim)
         self.D = Discriminator()
         self.latent_dim = latent_dim
+
 
     def forward(self, x, y):
         Gx, mu, logvar = self.G(x)  # output of the VAE
@@ -688,7 +784,7 @@ class VAEGAN (nn.Module):
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-    
+
     def training_step(self, batch):
         """
         Training step for VAE-GAN (trains both G and D)
@@ -702,34 +798,28 @@ class VAEGAN (nn.Module):
 
         x = batch['x']
         y = batch['y']
-        
-        ### Train Generator
-        self.optimizer_G.zero_grad()
-        
+
         # Forward pass
         Gx, mu, logvar, DGx, Dy = self(x, y)
-        
+
         # Generator losses
         loss_trans = self.translation_loss(Gx, y)
         total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dy, DGx)
-        loss_id = self.identity_loss(x, y, Gx, y)  # Simplified identity
+        loss_id = self.identity_loss(x, y, Gx, y)
         loss_kl = self.kl_loss(mu, logvar)
         G_loss = (loss_trans + self.lambda_gan * total_loss_gan +
                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
 
-        # Backward and optimize
-        G_loss.backward(retain_graph=True)  # retain_graph to reuse for D
+        # Discriminator loss
+        total_loss_gan_disc, loss_gan_real_disc, loss_gan_fake_disc = self.gan_loss_disc(Dy, DGx.detach())
+        ### Train Generator
+        self.optimizer_G.zero_grad()
+        G_loss.backward(retain_graph=True)
         self.optimizer_G.step()
 
         ### Train Discriminator
         self.optimizer_D.zero_grad()
-
-        # Discriminator loss (reuse forward outputs)
-        total_loss_gan_disc, loss_gan_real_disc, loss_gan_fake_disc = self.gan_loss_disc(Dy, DGx.detach())
-
-        # Backward and optimize
         total_loss_gan_disc.backward()
-        
         self.optimizer_D.step()
 
         # Return metrics
@@ -743,6 +833,7 @@ class VAEGAN (nn.Module):
             'loss_gan_fake': loss_gan_fake.item(),
             'loss_identity': loss_id.item(),
             'loss_kl': loss_kl.item(),
+            'debug_info': self.debug_info if self.debug_mode else None
         }
 
     def validation_step(self, batch):
@@ -790,7 +881,7 @@ class CycleAE (nn.Module):
         super(CycleAE, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
-    
+
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
@@ -849,7 +940,6 @@ class CycleAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -859,7 +949,7 @@ class CycleAE (nn.Module):
             'loss_trans': loss_trans.item(),
             'G_loss': total_loss.item()
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for CycleAE
@@ -897,7 +987,7 @@ class CycleVAE (nn.Module):
         super(CycleVAE, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
-    
+
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -931,7 +1021,7 @@ class CycleVAE (nn.Module):
         self.loss_trans = TranslationLoss()
         self.loss_kl = KLDivergenceLoss()
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-    
+
     def training_step(self, batch):
         """
         Training step for CycleVAE
@@ -944,7 +1034,7 @@ class CycleVAE (nn.Module):
             raise ValueError("Loss functions have not been configured yet.")
         if self.optimizer is None:
             raise ValueError("Optimizer has not been configured yet.")
-        
+
         x = batch['x']
         y = batch['y']
 
@@ -955,14 +1045,12 @@ class CycleVAE (nn.Module):
         loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-        # Do we need to compute the kl loss over 4 terms ? or just 2 (G and F) ?
 
         total_loss = loss_cycle + loss_trans + self.lambda_kl * loss_kl
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -973,7 +1061,7 @@ class CycleVAE (nn.Module):
             'loss_kl': loss_kl.item(),
             'G_loss': total_loss.item()
         }
-    
+
     def validation_step(self, batch):
         """
         Validation step for CycleVAE
@@ -1016,7 +1104,15 @@ class CycleAEGAN (nn.Module):
         self.G = Autoencoder()
         self.DX = Discriminator()
         self.DY = Discriminator()
-    
+
+        # Debug mode for detailed logging
+        self.debug_mode = False
+        self.debug_info = {}
+
+    def enable_debug_mode(self, enabled=True):
+        """Enable/disable debug mode for detailed TensorBoard logging"""
+        self.debug_mode = enabled
+
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
@@ -1026,7 +1122,7 @@ class CycleAEGAN (nn.Module):
         DXFy = self.DX(Fy)
         DXx = self.DX(x)
         DYy = self.DY(y)
-        return Gx, FGx, Fy, GFy, DYGx, DXFy # All Netework expect Gx as their first output
+        return Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy # All Netework expect Gx as their first output (added DXx, DYy for debug)
     
     def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
         """Configure optimizer for training"""
@@ -1057,7 +1153,7 @@ class CycleAEGAN (nn.Module):
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-    
+
     def training_step(self, batch):
         """
         Training step for CycleAEGAN
@@ -1076,12 +1172,12 @@ class CycleAEGAN (nn.Module):
         y = batch['y']
 
         # Forward pass
-        Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
+        Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
 
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
-        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
         loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
 
@@ -1092,7 +1188,6 @@ class CycleAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-
         self.optimizer.step()
 
         # Return metrics
@@ -1105,6 +1200,7 @@ class CycleAEGAN (nn.Module):
             'loss_gan_g_y_real': loss_gan_g_y_real.item(),
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
+            'G_loss': total_loss.item()
         }
 
     def validation_step(self, batch):
@@ -1123,12 +1219,12 @@ class CycleAEGAN (nn.Module):
             y = batch['y']
 
             # Forward pass
-            Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
+            Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
 
             # Compute losses
             loss_cycle = self.loss_cycle(x, FGx, y, GFy)
-            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
-            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
+            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
+            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
             loss_identity = self.loss_identity(x, y, Gx, y) + self.loss_identity(y, x, Fy, x)
             total_loss = (self.lambda_cycle * loss_cycle +
@@ -1150,14 +1246,22 @@ class CycleAEGAN (nn.Module):
 
        
 class CycleVAEGAN (nn.Module):
-    
+
     def __init__(self, latent_dim=64):
         super(CycleVAEGAN, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
         self.DX = Discriminator()
         self.DY = Discriminator()
-    
+
+        # Debug mode for detailed logging
+        self.debug_mode = False
+        self.debug_info = {}
+
+    def enable_debug_mode(self, enabled=True):
+        """Enable/disable debug mode for detailed TensorBoard logging"""
+        self.debug_mode = enabled
+
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -1243,7 +1347,6 @@ class CycleVAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-
         self.optimizer.step()
 
         # Return metrics
@@ -1257,6 +1360,7 @@ class CycleVAEGAN (nn.Module):
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
+            'G_loss': total_loss.item()
         }
 
     def validation_step(self, batch):
@@ -1359,7 +1463,7 @@ class CycleAE_unpaired(nn.Module):
         Returns:
             dict with loss metrics
         """
-        if self.loss_cycle is None or self.loss_trans is None:
+        if self.loss_cycle is None:
             raise ValueError("Loss functions have not been configured yet.")
         if self.optimizer is None:
             raise ValueError("Optimizer has not been configured yet.")
@@ -1376,7 +1480,6 @@ class CycleAE_unpaired(nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -1418,7 +1521,7 @@ class CycleVAE_unpaired (nn.Module):
         super(CycleVAE_unpaired, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
-    
+
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -1452,7 +1555,7 @@ class CycleVAE_unpaired (nn.Module):
         self.loss_kl = KLDivergenceLoss()
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-    
+
     def training_step(self, batch):
         """
         Training step for CycleVAE unpaired
@@ -1475,14 +1578,12 @@ class CycleVAE_unpaired (nn.Module):
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-        # Same here, do we need to compute the kl loss over 4 terms ? or just 2 (G and F) ?
 
         total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        
         self.optimizer.step()
 
         # Return metrics
@@ -1531,7 +1632,7 @@ class CycleAEGAN_unpaired (nn.Module):
         self.G = Autoencoder()
         self.DX = Discriminator()
         self.DY = Discriminator()
-    
+
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
@@ -1569,7 +1670,7 @@ class CycleAEGAN_unpaired (nn.Module):
         self.loss_gan_gen = GANLossGenerator()
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-    
+
     def training_step(self, batch):
         """
         Training step for CycleAEGAN unpaired
@@ -1597,11 +1698,10 @@ class CycleAEGAN_unpaired (nn.Module):
 
         total_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g)
-
-        # Backward pass
+        
+         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-
         self.optimizer.step()
 
         # Return metrics
@@ -1660,7 +1760,7 @@ class CycleVAEGAN_unpaired (nn.Module):
         self.G = VariationalAutoencoder(latent_dim)
         self.DX = Discriminator()
         self.DY = Discriminator()
-    
+
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
@@ -1700,7 +1800,7 @@ class CycleVAEGAN_unpaired (nn.Module):
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-    
+
     def training_step(self, batch):
         """
         Training step for CycleVAEGAN unpaired
@@ -1739,7 +1839,6 @@ class CycleVAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-
         self.optimizer.step()
 
         # Return metrics
