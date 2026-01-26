@@ -881,7 +881,13 @@ class CycleAE (nn.Module):
         super(CycleAE, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
-
+        
+        # loss related attributes to be set in "configure_loss"
+        self.optimizer = None
+        self.loss_cycle = None
+        self.loss_trans = None
+        self.lambda_cycle = 0 
+    
     def forward(self, x, y):
         Gx = self.G(x)
         FGx = self.F(Gx)
@@ -913,6 +919,7 @@ class CycleAE (nn.Module):
         """Configure loss functions (ignores unused kwargs)"""
         self.loss_cycle = CycleConsistencyLoss()
         self.loss_trans = TranslationLoss()
+        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
 
     def training_step(self, batch):
         """
@@ -935,7 +942,7 @@ class CycleAE (nn.Module):
         # Compute losses
         loss_cycle = self.loss_cycle(x, FGx, y, GFy)
         loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
-        total_loss = loss_cycle + loss_trans
+        total_loss = self.lambda_cycle * loss_cycle + loss_trans
 
         # Backward pass
         self.optimizer.zero_grad()

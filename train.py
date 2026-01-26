@@ -437,7 +437,8 @@ def main(args):
     model.configure_loss(
         lambda_kl=args.lambda_kl,
         lambda_gan=args.lambda_gan,
-        lambda_identity=args.lambda_identity
+        lambda_identity=args.lambda_identity,
+        lambda_cycle=args.lambda_cycle
     ) # We give all the lambdas even if not used by the architecture, the model will pick what it needs
     print(f"Model configured with optimizers and loss functions")
     
@@ -558,7 +559,14 @@ if __name__ == '__main__':
                         help='GAN loss weight for AEGAN')
     parser.add_argument('--lambda_identity', type=float, default=5.0,
                         help='Identity loss weight for AEGAN')
+<<<<<<< HEAD
 
+=======
+    parser.add_argument('--lambda_cycle', type=float, default=10.0,
+                        help='Cycle consistency loss weight for Cycle architectures')
+    
+    
+>>>>>>> 5370001a85c5e9ce4cd4a669acd30bd4c823bb9a
     # Checkpointing and output
     parser.add_argument('--output_dir', type=str, default='runs',
                         help='Directory to save models and logs')
