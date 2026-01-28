@@ -556,14 +556,9 @@ if __name__ == '__main__':
                         help='GAN loss weight for AEGAN')
     parser.add_argument('--lambda_identity', type=float, default=5.0,
                         help='Identity loss weight for AEGAN')
-<<<<<<< HEAD
-
-=======
     parser.add_argument('--lambda_cycle', type=float, default=10.0,
                         help='Cycle consistency loss weight for Cycle architectures')
     
-    
->>>>>>> 5370001a85c5e9ce4cd4a669acd30bd4c823bb9a
     # Checkpointing and output
     parser.add_argument('--output_dir', type=str, default='runs',
                         help='Directory to save models and logs')
