@@ -373,9 +373,6 @@ def main(args):
     if args.architecture in ['autoencoder', 'vae']:
         if args.source_modality != args.target_modality:
             raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
-    else:
-        if args.source_modality == args.target_modality:
-            raise ValueError("Source and target modalities should be different for GAN-based architectures.")
     
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
