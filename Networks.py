@@ -409,6 +409,194 @@ class Autoencoder (nn.Module):
                 'output': output
             }
 
+class DoubleAutoencoder(nn.Module):
+    """
+    Double Autoencoder with shared encoder and two separate decoders.
+    
+    This architecture is designed for pretraining before CycleAE:
+    - One shared encoder learns a common latent representation
+    - Decoder A reconstructs modality A (source)
+    - Decoder B reconstructs modality B (target)
+    
+    After training, the decoders can be swapped to create translation networks:
+    - G (A→B) = Encoder + Decoder_B
+    - F (B→A) = Encoder + Decoder_A
+    
+    The batch should contain:
+    - 'x': images from modality A (source)
+    - 'y': images from modality B (target)
+    
+    Both are encoded with the shared encoder and reconstructed with their respective decoders.
+    """
+    def __init__(self):
+        super(DoubleAutoencoder, self).__init__()
+        # Shared encoder
+        self.encoder = Encoder()
+        # Two separate decoders for each modality
+        self.decoder_A = Decoder()  # Reconstructs source modality
+        self.decoder_B = Decoder()  # Reconstructs target modality
+
+        # loss related attributes to be set in "configure_loss"
+        self.optimizer = None
+        self.loss_fn = None
+
+    def forward(self, x, y):
+        """
+        Forward pass for both modalities.
+        
+        Args:
+            x: Input from modality A (source)
+            y: Input from modality B (target)
+        
+        Returns:
+            Gx: Reconstruction of x (x -> encoder -> decoder_A -> Gx)
+            Gy: Reconstruction of y (y -> encoder -> decoder_B -> Gy)
+        """
+        # Encode both modalities with shared encoder
+        z_x = self.encoder(x)
+        z_y = self.encoder(y)
+        
+        # Decode with respective decoders
+        Gx = self.decoder_A(z_x)  # Reconstruct source
+        Gy = self.decoder_B(z_y)  # Reconstruct target
+        
+        return Gx, Gy  # First output is Gx for compatibility
+    
+    def translate_A_to_B(self, x):
+        """Translate from modality A to B (uses decoder_B)"""
+        z = self.encoder(x)
+        return self.decoder_B(z)
+    
+    def translate_B_to_A(self, y):
+        """Translate from modality B to A (uses decoder_A)"""
+        z = self.encoder(y)
+        return self.decoder_A(z)
+    
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+    
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+    
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else:
+            raise KeyError("optimizer state not found in states")
+    
+    def configure_loss(self, **kwargs):
+        """Configure loss functions (ignores unused kwargs)"""
+        self.loss_fn = TranslationLoss()
+    
+    def training_step(self, batch):
+        """
+        Training step for DoubleAutoencoder.
+        
+        Args:
+            batch: dict with 'x' (source modality) and 'y' (target modality)
+        
+        Returns:
+            dict with loss metrics
+        """
+        if self.loss_fn is None:
+            raise ValueError("Loss function has not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+
+        x = batch['x']  # Source modality
+        y = batch['y']  # Target modality
+        
+        # Forward pass - reconstruct both modalities
+        Gx, Gy = self(x, y)
+
+        # Compute reconstruction losses for both modalities
+        loss_recon_A = self.loss_fn(Gx, x)  # Reconstruction of source
+        loss_recon_B = self.loss_fn(Gy, y)  # Reconstruction of target
+        
+        # Total loss is sum of both reconstruction losses
+        total_loss = loss_recon_A + loss_recon_B
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        self.optimizer.step()
+
+        # Return metrics
+        return {
+            'G_loss': total_loss.item(),
+            'loss_recon_A': loss_recon_A.item(),
+            'loss_recon_B': loss_recon_B.item(),
+            'total_loss': total_loss.item()
+        }
+
+    def validation_step(self, batch):
+        """
+        Validation step for DoubleAutoencoder.
+        
+        Args:
+            batch: dict with 'x' (source modality) and 'y' (target modality)
+        
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.loss_fn is None:
+            raise ValueError("Loss function has not been configured yet.")
+
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, Gy = self(x, y)
+            
+            # Compute losses
+            loss_recon_A = self.loss_fn(Gx, x)
+            loss_recon_B = self.loss_fn(Gy, y)
+            total_loss = loss_recon_A + loss_recon_B
+            
+            # Return metrics (output is Gx for compatibility with logging)
+            return {
+                'G_loss': total_loss.item(),
+                'total_loss': total_loss.item(),
+                'loss_recon_A': loss_recon_A.item(),
+                'loss_recon_B': loss_recon_B.item(),
+                'output': Gx,  # Return reconstruction of source for visualization
+                'output_B': Gy  # Also return reconstruction of target
+            }
+    
+    def create_cycle_ae(self):
+        """
+        Create a CycleAE from this pretrained DoubleAutoencoder.
+        
+        The resulting CycleAE will have:
+        - G (A→B): shared encoder + decoder_B
+        - F (B→A): shared encoder + decoder_A
+        
+        Note: Both G and F share the same encoder weights.
+        
+        Returns:
+            CycleAE: A new CycleAE with weights initialized from this model
+        """
+        cycle_ae = CycleAE()
+        
+        # G translates A→B: encoder + decoder_B
+        cycle_ae.G.encoder.load_state_dict(self.encoder.state_dict())
+        cycle_ae.G.decoder.load_state_dict(self.decoder_B.state_dict())
+        
+        # F translates B→A: encoder + decoder_A  
+        cycle_ae.F.encoder.load_state_dict(self.encoder.state_dict())
+        cycle_ae.F.decoder.load_state_dict(self.decoder_A.state_dict())
+        
+        return cycle_ae
 
 class VariationalAutoencoder (nn.Module):
     def __init__(self, latent_dim=64):
