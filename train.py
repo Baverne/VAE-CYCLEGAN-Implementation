@@ -38,6 +38,9 @@ def create_model(architecture):
     if architecture == 'autoencoder':
         model = Autoencoder()
         print(f"Created Autoencoder")
+    elif architecture == 'doubleae':
+        model = DoubleAutoencoder()
+        print(f"Created Double Autoencoder (shared encoder, two decoders)")
     elif architecture == 'vae':
         model = VariationalAutoencoder()
         print(f"Created Variational Autoencoder")
@@ -522,7 +525,7 @@ if __name__ == '__main__':
     
     # Architecture selection
     parser.add_argument('--architecture', type=str, default='autoencoder',
-                        choices=['autoencoder', 'vae', 'aegan',
+                        choices=['autoencoder', 'doubleae', 'vae', 'aegan',
                                  'vaegan', 'cycleae', 'cyclevae',
                                  'cycleaegan', 'cyclevaegan'],
                         help='Network architecture to train')

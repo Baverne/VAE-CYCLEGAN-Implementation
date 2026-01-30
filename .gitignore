@@ -2,6 +2,9 @@
 output/
 runs/
 
+#debug
+debugexploration/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
