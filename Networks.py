@@ -190,13 +190,14 @@ class Decoder (nn.Module):
         layers.append(U(256, 128))
         layers.append(U(128, 64))
         layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Identity activation
+        layers.append(nn.Sigmoid())  # Let the sigmoid handle the distribution between 1 and 0.
         self.model = nn.Sequential(*layers)
 
         self.apply(self._init_weights)
 
     def forward(self, x):
         out = self.model(x)
-        return torch.clamp(out, 0, 1)
+        return out   # Remove Clamp (0, 1)
     
     def _init_weights(self, module):
         """Initialize weights using Kaiming initialization for ReLU networks"""
