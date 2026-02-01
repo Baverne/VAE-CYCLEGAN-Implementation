@@ -189,14 +189,14 @@ class Decoder (nn.Module):
         layers.append(U(512, 256))
         layers.append(U(256, 128))
         layers.append(U(128, 64))
-        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Identity activation
+        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Sigmoid", use_norm=False)) # No norm, Identity activation
         self.model = nn.Sequential(*layers)
 
         self.apply(self._init_weights)
 
     def forward(self, x):
         out = self.model(x)
-        return torch.clamp(out, 0, 1)
+        return out
     
     def _init_weights(self, module):
         """Initialize weights using Kaiming initialization for ReLU networks"""
@@ -304,9 +304,12 @@ class Autoencoder (nn.Module):
         Gx = self.decoder(z)
         return Gx # All Network expect Gx as their first output
     
-    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
-        """Configure optimizer for training"""
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999), decoder_only=False):
+        """Configure optimizer for training. If decoder_only, only optimize decoder."""
+        if decoder_only:
+            self.optimizer = torch.optim.Adam(self.decoder.parameters(), lr=lr, betas=betas)
+        else:
+            self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
         return self.optimizer
     
     def save_optimizer_states(self):
@@ -323,7 +326,7 @@ class Autoencoder (nn.Module):
             self.optimizer.load_state_dict(states['optimizer'])
         else :
             raise KeyError("optimizer state not found in states")
-    
+
     def configure_loss(self, **kwargs):
         """Configure loss functions (ignores unused kwargs)"""
         self.loss_fn = TranslationLoss()
@@ -406,7 +409,7 @@ class Autoencoder (nn.Module):
                 'G_loss': loss_trans.item(),
                 'total_loss': loss_trans.item(),
                 'loss_trans': loss_trans.item(),
-                'output': output
+                'Gx': output  # Gx = G(x) for visualization
             }
 
 class DoubleAutoencoder(nn.Module):
@@ -563,14 +566,14 @@ class DoubleAutoencoder(nn.Module):
             loss_recon_B = self.loss_fn(Gy, y)
             total_loss = loss_recon_A + loss_recon_B
             
-            # Return metrics (output is Gx for compatibility with logging)
+            # Return metrics
             return {
                 'G_loss': total_loss.item(),
                 'total_loss': total_loss.item(),
                 'loss_recon_A': loss_recon_A.item(),
                 'loss_recon_B': loss_recon_B.item(),
-                'output': Gx,  # Return reconstruction of source for visualization
-                'output_B': Gy  # Also return reconstruction of target
+                'Gx': Gx,  # Reconstruction of source modality
+                'Fy': Gy   # Reconstruction of target modality
             }
     
     def create_cycle_ae(self):
@@ -730,7 +733,7 @@ class VariationalAutoencoder (nn.Module):
                 'G_loss': total_loss.item(),
                 'loss_trans': loss_trans.item(),
                 'loss_kl': loss_kl.item(),
-                'output': output
+                'Gx': output  # Gx = G(x) for visualization
             }
 
     
@@ -915,7 +918,7 @@ class AEGAN (nn.Module):
                 'loss_gan_g_real': loss_gan_g_real.item(),
                 'loss_gan_g_fake': loss_gan_g_fake.item(),
                 'loss_identity': loss_id.item(),
-                'output': Gx
+                'Gx': Gx  # Gx = G(x) for visualization
             }
 
 
@@ -1060,7 +1063,7 @@ class VAEGAN (nn.Module):
                 'loss_gan_fake': loss_gan_fake.item(),
                 'loss_identity': loss_id.item(),
                 'loss_kl': loss_kl.item(),
-                'output': Gx
+                'Gx': Gx  # Gx = G(x) for visualization
             }
 
 
@@ -1173,7 +1176,8 @@ class CycleAE (nn.Module):
                 'loss_cycle': loss_cycle.item(),
                 'loss_trans': loss_trans.item(),
                 'G_loss': total_loss.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
+                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
+                'Fy': Fy.detach()   # Fy = F(y) translation B->A
             }
 
 
@@ -1288,7 +1292,8 @@ class CycleVAE (nn.Module):
                 'loss_trans': loss_trans.item(),
                 'loss_kl': loss_kl.item(),
                 'G_loss': total_loss.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ??????
+                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
+                'Fy': Fy.detach()   # Fy = F(y) translation B->A
             }
 
 
@@ -1436,7 +1441,8 @@ class CycleAEGAN (nn.Module):
                 'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
                 'loss_gan_g': loss_gan_g.item(),
                 'loss_identity': loss_identity.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
+                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
+                'Fy': Fy.detach()   # Fy = F(y) translation B->A
             }
 
        

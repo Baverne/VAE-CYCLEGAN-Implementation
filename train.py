@@ -87,6 +87,14 @@ def load_checkpoint(model, filename, device):
         checkpoint = torch.load(filename, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
 
+        # Ensure optimizer is configured before loading its state
+        if not hasattr(model, 'optimizer') or model.optimizer is None:
+            # Try to configure optimizer with default args (will be replaced if needed)
+            try:
+                model.configure_optimizers()
+            except Exception:
+                pass
+
         # Load optimizer state(s)
         if 'optimizer_states' in checkpoint:
             model.load_optimizer_states(checkpoint['optimizer_states'])
@@ -97,6 +105,73 @@ def load_checkpoint(model, filename, device):
         return epoch, loss
     else:
         raise FileNotFoundError(f"No checkpoint found at {filename}")
+
+
+def load_pretrained_doubleae_to_cycleae(cycleae_model, doubleae_checkpoint_path, device):
+    """
+    Load pretrained DoubleAutoencoder weights into a CycleAE model.
+    
+    The DoubleAutoencoder has:
+    - encoder (shared)
+    - decoder_A (reconstructs source modality)
+    - decoder_B (reconstructs target modality)
+    
+    The CycleAE has:
+    - G.encoder + G.decoder (translates source -> target)
+    - F.encoder + F.decoder (translates target -> source)
+    
+    Mapping strategy:
+    - G.encoder <- encoder (shared encoder for A->B translation)
+    - G.decoder <- decoder_B (translates to target modality)
+    - F.encoder <- encoder (shared encoder for B->A translation)
+    - F.decoder <- decoder_A (translates to source modality)
+    
+    Args:
+        cycleae_model: CycleAE model to initialize
+        doubleae_checkpoint_path: Path to DoubleAutoencoder checkpoint
+        device: Device to load the checkpoint on
+    """
+    if not os.path.exists(doubleae_checkpoint_path):
+        raise FileNotFoundError(f"No DoubleAutoencoder checkpoint found at {doubleae_checkpoint_path}")
+    
+    # Load checkpoint
+    print(f"Loading DoubleAutoencoder weights from {doubleae_checkpoint_path}")
+    checkpoint = torch.load(doubleae_checkpoint_path, map_location=device)
+    doubleae_state_dict = checkpoint['model_state_dict']
+    
+    # Extract DoubleAutoencoder components
+    encoder_state = {}
+    decoder_A_state = {}
+    decoder_B_state = {}
+    
+    for key, value in doubleae_state_dict.items():
+        if key.startswith('encoder.'):
+            # Remove 'encoder.' prefix
+            new_key = key[8:]
+            encoder_state[new_key] = value
+        elif key.startswith('decoder_A.'):
+            # Remove 'decoder_A.' prefix
+            new_key = key[10:]
+            decoder_A_state[new_key] = value
+        elif key.startswith('decoder_B.'):
+            # Remove 'decoder_B.' prefix
+            new_key = key[10:]
+            decoder_B_state[new_key] = value
+    
+    # Load into CycleAE
+    # G translates A->B, so use encoder + decoder_B
+    print("Loading encoder + decoder_B into G (A->B translation)")
+    cycleae_model.G.encoder.load_state_dict(encoder_state)
+    cycleae_model.G.decoder.load_state_dict(decoder_B_state)
+    
+    # F translates B->A, so use encoder + decoder_A
+    print("Loading encoder + decoder_A into F (B->A translation)")
+    cycleae_model.F.encoder.load_state_dict(encoder_state)
+    cycleae_model.F.decoder.load_state_dict(decoder_A_state)
+    
+    print("Successfully loaded DoubleAutoencoder weights into CycleAE")
+    print("  G (A->B): encoder (shared) + decoder_B (target modality)")
+    print("  F (B->A): encoder (shared) + decoder_A (source modality)")
 
 
 def truncate_tensorboard_events(tensorboard_dir, max_epoch):
@@ -217,7 +292,8 @@ def validate(model, dataloader, device, args):
     model.eval()
     total_loss = 0.0
     loss_components = {}
-    last_output = None
+    last_Gx = None
+    last_Fy = None
     last_x = None
     last_y = None
     
@@ -230,8 +306,9 @@ def validate(model, dataloader, device, args):
             # Model handles validation
             metrics = model.validation_step(batch)
             
-            # Extract output for visualization
-            output = metrics.pop('output')
+            # Extract outputs for visualization (Gx and optionally Fy)
+            Gx = metrics.pop('Gx')
+            Fy = metrics.pop('Fy', None)  # Optional, only for Cycle/Double models
             
             # Track losses
             total_loss += metrics['G_loss']
@@ -241,7 +318,8 @@ def validate(model, dataloader, device, args):
                 loss_components[key] += value
             
             # Keep last batch for visualization
-            last_output = output
+            last_Gx = Gx
+            last_Fy = Fy
             last_x = batch['x']
             last_y = batch['y']
     
@@ -249,7 +327,7 @@ def validate(model, dataloader, device, args):
     avg_loss = total_loss / len(dataloader)
     avg_loss_components = {k: v / len(dataloader) for k, v in loss_components.items()}
     
-    return avg_loss, avg_loss_components, last_output, last_x, last_y
+    return avg_loss, avg_loss_components, last_Gx, last_Fy, last_x, last_y
 
 
 def create_dataloaders_paired(args):
@@ -368,7 +446,20 @@ def create_dataloaders_unpaired(args):
 
     return train_loader, test_loader
     
-
+def load_component_checkpoint(component, filename, device):
+    """
+    Load weights from an Autoencoder checkpoint into a specific component (G or F)
+    """
+    if os.path.exists(filename):
+        print(f"Loading component weights from {filename}...")
+        checkpoint = torch.load(filename, map_location=device)
+        
+        # Le checkpoint contient 'model_state_dict', on le charge dans le composant
+        # Le composant (ex: model.G) est une instance d'Autoencoder, donc les clés correspondent
+        component.load_state_dict(checkpoint['model_state_dict'])
+        print("Weights loaded successfully.")
+    else:
+        raise FileNotFoundError(f"No checkpoint found at {filename}")
 
 def main(args):
 
@@ -431,16 +522,22 @@ def main(args):
     
     # Create model
     model = create_model(args.architecture).to(device)
-    
+
+    # Load pretrained DoubleAutoencoder weights into CycleAE if specified
+    if args.pretrained_doubleae is not None:
+        if args.architecture not in ['cycleae', 'cyclevae', 'cycleaegan', 'cyclevaegan']:
+            raise ValueError(f"--pretrained_doubleae can only be used with Cycle architectures, not {args.architecture}")
+        print(f"\nInitializing {args.architecture} from pretrained DoubleAutoencoder...")
+        load_pretrained_doubleae_to_cycleae(model, args.pretrained_doubleae, device)
+        print("Pretraining loaded successfully\n")
+
     # Configure model optimizers and losses
     model.configure_optimizers(lr=args.lr) # Each model will create its own optimizers
     model.configure_loss(
         lambda_kl=args.lambda_kl,
         lambda_gan=args.lambda_gan,
         lambda_identity=args.lambda_identity,
-        lambda_cycle=args.lambda_cycle
-    ) # We give all the lambdas even if not used by the architecture, the model will pick what it needs
-    print(f"Model configured with optimizers and loss functions")
+        lambda_cycle=args.lambda_cycle)
     
     # Load checkpoint if resuming
     start_epoch = 0
@@ -449,6 +546,10 @@ def main(args):
         checkpoint_path = Path(args.resume)
         start_epoch, _ = load_checkpoint(model, checkpoint_path, device)
         start_epoch += 1
+
+    
+    # We give all the lambdas even if not used by the architecture, the model will pick what it needs
+    print(f"Model configured with optimizers and loss functions")
     
     # Training loop
     print(f"\nStarting training for {args.epochs} epochs...")
@@ -476,7 +577,7 @@ def main(args):
         
         # On test set
         if test_loader is not None and epoch % args.log_image_freq == 0 :
-            test_loss, test_loss_components, test_output, test_x, test_y = validate(
+            test_loss, test_loss_components, test_Gx, test_Fy, test_x, test_y = validate(
                 model, test_loader, device, args
             )
             print(f"Test Loss: {test_loss:.4f}")
@@ -494,11 +595,17 @@ def main(args):
             # Log test images to TensorBoard
             test_x_vis = test_x[:4] * 0.5 + 0.5
             test_y_vis = test_y[:4] * 0.5 + 0.5
-            test_output_vis = test_output[:4] * 0.5 + 0.5
+            test_Gx_vis = test_Gx[:4] * 0.5 + 0.5
             
-            writer.add_images(f'{args.source_modality}/test_input', test_x_vis, epoch)
-            writer.add_images(f'{args.target_modality}/test_target', test_y_vis, epoch)
-            writer.add_images(f'{args.target_modality}/test_output', test_output_vis, epoch)
+            writer.add_images(f'{args.source_modality}/test_x', test_x_vis, epoch)
+            writer.add_images(f'{args.target_modality}/test_y', test_y_vis, epoch)
+            writer.add_images(f'{args.target_modality}/test_Gx', test_Gx_vis, epoch)
+            
+            # Log Fy if available (for Cycle/Double architectures)
+            if test_Fy is not None:
+                test_Fy_vis = test_Fy[:4] * 0.5 + 0.5
+                writer.add_images(f'{args.source_modality}/test_Fy', test_Fy_vis, epoch)
+            
             # Save best model
             if test_loss < best_test_loss:
                 best_test_loss = test_loss
@@ -519,6 +626,7 @@ def main(args):
 
 
 if __name__ == '__main__':
+    
 
     ##### ARGUMENTS DEFINITION #####
     parser = argparse.ArgumentParser(description='Train VAE-CycleGAN models')
@@ -529,6 +637,16 @@ if __name__ == '__main__':
                                  'vaegan', 'cycleae', 'cyclevae',
                                  'cycleaegan', 'cyclevaegan'],
                         help='Network architecture to train')
+    
+    # Transfer Learning & Pretraining parameters
+    parser.add_argument('--freeze_encoder', action='store_true',
+                        help='Freeze encoder weights and train decoder only (Autoencoder only)')
+    parser.add_argument('--pretrained_G', type=str, default=None,
+                        help='Path to a pretrained Autoencoder checkpoint to initialize G (CycleAE only)')
+    parser.add_argument('--pretrained_F', type=str, default=None,
+                        help='Path to a pretrained Autoencoder checkpoint to initialize F (CycleAE only)')
+    parser.add_argument('--pretrained_doubleae', type=str, default=None,
+                        help='Path to a pretrained DoubleAutoencoder checkpoint to initialize CycleAE (both G and F)')
     
     # Data parameters
     parser.add_argument('--data_dir', type=str, default='datasets',
@@ -579,7 +697,5 @@ if __name__ == '__main__':
                         help='Disable CUDA')
     
     args = parser.parse_args()
-    
 
-    #### START TRAINING ####
     main(args)
