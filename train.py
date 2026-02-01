@@ -551,8 +551,44 @@ def main(args):
     # We give all the lambdas even if not used by the architecture, the model will pick what it needs
     print(f"Model configured with optimizers and loss functions")
     
+    # Initial validation (epoch -1) before training starts
+    print(f"\n{'='*80}")
+    print("INITIAL VALIDATION (Before Training)")
+    print(f"{'='*80}")
+    if test_loader is not None:
+        initial_test_loss, initial_test_loss_components, initial_test_Gx, initial_test_Fy, initial_test_x, initial_test_y = validate(
+            model, test_loader, device, args
+        )
+        print(f"Initial Test Loss: {initial_test_loss:.4f}")
+        for key, value in initial_test_loss_components.items():
+            try:
+                print(f"  {key}: {value:.6f}")
+            except Exception as e:
+                print(f"  {key}: {value} (could not format as float: {e})")
+        
+        # Log initial metrics to TensorBoard at epoch -1
+        writer.add_scalar('Loss/test', initial_test_loss, -1)
+        for key, value in initial_test_loss_components.items():
+            writer.add_scalar(f'Loss_Components_test/{key}', value, -1)
+        
+        # Log initial test images to TensorBoard
+        initial_test_x_vis = initial_test_x[:4] * 0.5 + 0.5
+        initial_test_y_vis = initial_test_y[:4] * 0.5 + 0.5
+        initial_test_Gx_vis = initial_test_Gx[:4] * 0.5 + 0.5
+        
+        writer.add_images(f'{args.source_modality}/test_x', initial_test_x_vis, -1)
+        writer.add_images(f'{args.target_modality}/test_y', initial_test_y_vis, -1)
+        writer.add_images(f'{args.target_modality}/test_Gx', initial_test_Gx_vis, -1)
+        
+        # Log Fy if available (for Cycle/Double architectures)
+        if initial_test_Fy is not None:
+            initial_test_Fy_vis = initial_test_Fy[:4] * 0.5 + 0.5
+            writer.add_images(f'{args.source_modality}/test_Fy', initial_test_Fy_vis, -1)
+        
+        print(f"{'='*80}\n")
+    
     # Training loop
-    print(f"\nStarting training for {args.epochs} epochs...")
+    print(f"Starting training for {args.epochs} epochs...")
     best_test_loss = float('inf')
     
 

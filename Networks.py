@@ -374,6 +374,7 @@ class Autoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -692,6 +693,7 @@ class VariationalAutoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1130,14 +1132,17 @@ class CycleAE (nn.Module):
         # Forward pass
         Gx, FGx, Fy, GFy = self(x, y)
 
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        # Compute losses (FIXED: correct argument order for loss_cycle)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
         total_loss = self.lambda_cycle * loss_cycle + loss_trans
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        # Gradient clipping to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1165,10 +1170,11 @@ class CycleAE (nn.Module):
             # Forward pass
             Gx, FGx, Fy, GFy = self(x, y)
 
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            # Compute losses (FIXED: correct argument order for loss_cycle)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
-            total_loss = loss_cycle + loss_trans
+            # Use lambda_cycle for consistency with training
+            total_loss = self.lambda_cycle * loss_cycle + loss_trans
 
             # Return metrics
             return {
@@ -1239,8 +1245,8 @@ class CycleVAE (nn.Module):
 
         # Forward pass
         Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        # Compute losses (FIXED: correct argument order for loss_cycle)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
@@ -1250,6 +1256,9 @@ class CycleVAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        # Gradient clipping to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1278,8 +1287,8 @@ class CycleVAE (nn.Module):
             # Forward pass
             Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
 
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            # Compute losses (FIXED: correct argument order for loss_cycle)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                         self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
@@ -1375,7 +1384,7 @@ class CycleAEGAN (nn.Module):
         Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
 
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -1388,6 +1397,7 @@ class CycleAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1422,11 +1432,11 @@ class CycleAEGAN (nn.Module):
             Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
 
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_identity = self.loss_identity(x, y, Gx, y) + self.loss_identity(y, x, Fy, x)
+            loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
             total_loss = (self.lambda_cycle * loss_cycle +
                           self.lambda_gan * loss_gan_g +
                           self.lambda_identity * loss_identity)
@@ -1531,7 +1541,7 @@ class CycleVAEGAN (nn.Module):
          DYGx, DXFy, DXx, DYy) = self(x, y)
 
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -1548,6 +1558,7 @@ class CycleVAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1587,7 +1598,7 @@ class CycleVAEGAN (nn.Module):
              DYGx, DXFy, DXx, DYy) = self(x, y)
             
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -1675,12 +1686,13 @@ class CycleAE_unpaired(nn.Module):
         Gx, FGx, Fy, GFy = self(x, y)
 
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         total_loss = self.lambda_cycle * loss_cycle
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1707,7 +1719,7 @@ class CycleAE_unpaired(nn.Module):
             Gx, FGx, Fy, GFy = self(x, y)
 
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             total_loss = self.lambda_cycle * loss_cycle
 
             # Return metrics
@@ -1776,7 +1788,7 @@ class CycleVAE_unpaired (nn.Module):
         # Forward pass
         Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
@@ -1785,6 +1797,7 @@ class CycleVAE_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1812,7 +1825,7 @@ class CycleVAE_unpaired (nn.Module):
             Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
 
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                         self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
             total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
@@ -1892,7 +1905,7 @@ class CycleAEGAN_unpaired (nn.Module):
         Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
 
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -1903,6 +1916,7 @@ class CycleAEGAN_unpaired (nn.Module):
          # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1934,7 +1948,7 @@ class CycleAEGAN_unpaired (nn.Module):
             Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
 
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -2026,7 +2040,7 @@ class CycleVAEGAN_unpaired (nn.Module):
          DYGx, DXFy, DXx, DYy) = self(x, y)
 
         # Compute losses
-        loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
@@ -2040,6 +2054,7 @@ class CycleVAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -2076,7 +2091,7 @@ class CycleVAEGAN_unpaired (nn.Module):
              DYGx, DXFy, DXx, DYy) = self(x, y)
             
             # Compute losses
-            loss_cycle = self.loss_cycle(x, FGx, y, GFy)
+            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
