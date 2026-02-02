@@ -189,7 +189,7 @@ class Decoder (nn.Module):
         layers.append(U(512, 256))
         layers.append(U(256, 128))
         layers.append(U(128, 64))
-        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Sigmoid", use_norm=False)) # No norm, Identity activation
+        layers.append(CaSb(64, 3, kernel_size=7, stride=1, activation="Identity", use_norm=False)) # No norm, Identity activation
         self.model = nn.Sequential(*layers)
 
         self.apply(self._init_weights)
