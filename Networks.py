@@ -747,7 +747,7 @@ class AEGAN (nn.Module):
         self.D = Discriminator()
 
         # Apply weight initialization (DCGAN style)
-        self.apply(weights_init)
+        self.apply(self._init_weights_)
 
         # loss related attributes to be set in "configure_loss"
         self.optimizer_G = None
@@ -759,6 +759,17 @@ class AEGAN (nn.Module):
         self.lambda_gan = 0
         self.lambda_identity = 0
 
+    def _init_weights_(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def forward(self, x, y):
         Gx = self.G(x)
@@ -842,7 +853,7 @@ class AEGAN (nn.Module):
         loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)
         loss_id = self.loss_identity_fn(Gy, y)
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
-        
+
         G_loss.backward()
         self.optimizer_G.step()
 
@@ -856,7 +867,7 @@ class AEGAN (nn.Module):
         
         # Compute discriminator loss
         D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
-        
+
         D_loss.backward()
         self.optimizer_D.step()
 
