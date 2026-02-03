@@ -587,6 +587,15 @@ def main(args):
         
         print(f"{'='*80}\n")
     
+    # Free up VRAM after initial validation
+    del initial_test_x, initial_test_y, initial_test_Gx
+    if initial_test_Fy is not None:
+        del initial_test_Fy
+    del initial_test_x_vis, initial_test_y_vis, initial_test_Gx_vis
+    if 'initial_test_Fy_vis' in locals():
+        del initial_test_Fy_vis
+    torch.cuda.empty_cache()
+    
     # Training loop
     print(f"Starting training for {args.epochs} epochs...")
     best_test_loss = float('inf')

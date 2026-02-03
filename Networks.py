@@ -944,6 +944,10 @@ class VAEGAN (nn.Module):
         self.G = VariationalAutoencoder(latent_dim)
         self.D = Discriminator()
         self.latent_dim = latent_dim
+        
+        # Debug mode for detailed logging
+        self.debug_mode = False
+        self.debug_info = {}
 
 
     def forward(self, x, y):
@@ -991,6 +995,10 @@ class VAEGAN (nn.Module):
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
 
+    def enable_debug_mode(self, enabled=True):
+        """Enable/disable debug mode for detailed TensorBoard logging"""
+        self.debug_mode = enabled
+
     def training_step(self, batch):
         """
         Training step for VAE-GAN (trains both G and D)
@@ -1029,7 +1037,7 @@ class VAEGAN (nn.Module):
         self.optimizer_D.step()
 
         # Return metrics
-        return {
+        metrics = {
             'G_loss': G_loss.item(),
             'D_loss': total_loss_gan_disc.item(),
             'loss_gan_disc_real': loss_gan_real_disc.item(),
@@ -1039,8 +1047,13 @@ class VAEGAN (nn.Module):
             'loss_gan_fake': loss_gan_fake.item(),
             'loss_identity': loss_id.item(),
             'loss_kl': loss_kl.item(),
-            'debug_info': self.debug_info if self.debug_mode else None
         }
+        
+        # Only include debug_info if debug mode is enabled
+        if self.debug_mode:
+            metrics['debug_info'] = self.debug_info
+            
+        return metrics
 
     def validation_step(self, batch):
         """
