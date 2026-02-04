@@ -566,34 +566,15 @@ def main(args):
             except Exception as e:
                 print(f"  {key}: {value} (could not format as float: {e})")
         
-        # Log initial metrics to TensorBoard at epoch -1
-        writer.add_scalar('Loss/test', initial_test_loss, -1)
-        for key, value in initial_test_loss_components.items():
-            writer.add_scalar(f'Loss_Components_test/{key}', value, -1)
-        
-        # Log initial test images to TensorBoard
-        initial_test_x_vis = initial_test_x[:4] * 0.5 + 0.5
-        initial_test_y_vis = initial_test_y[:4] * 0.5 + 0.5
-        initial_test_Gx_vis = initial_test_Gx[:4] * 0.5 + 0.5
-        
-        writer.add_images(f'{args.source_modality}/test_x', initial_test_x_vis, -1)
-        writer.add_images(f'{args.target_modality}/test_y', initial_test_y_vis, -1)
-        writer.add_images(f'{args.target_modality}/test_Gx', initial_test_Gx_vis, -1)
-        
-        # Log Fy if available (for Cycle/Double architectures)
-        if initial_test_Fy is not None:
-            initial_test_Fy_vis = initial_test_Fy[:4] * 0.5 + 0.5
-            writer.add_images(f'{args.source_modality}/test_Fy', initial_test_Fy_vis, -1)
-        
+        # Skip TensorBoard logging for initial validation (out of scale values)
+        # The validation is still run and printed to console for reference
+
         print(f"{'='*80}\n")
     
     # Free up VRAM after initial validation
     del initial_test_x, initial_test_y, initial_test_Gx
     if initial_test_Fy is not None:
         del initial_test_Fy
-    del initial_test_x_vis, initial_test_y_vis, initial_test_Gx_vis
-    if 'initial_test_Fy_vis' in locals():
-        del initial_test_Fy_vis
     torch.cuda.empty_cache()
     
     # Training loop

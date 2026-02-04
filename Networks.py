@@ -1482,9 +1482,24 @@ class CycleVAEGAN (nn.Module):
         self.DX = Discriminator()
         self.DY = Discriminator()
 
+        # Apply weight initialization
+        self.apply(self._init_weights)
+
         # Debug mode for detailed logging
         self.debug_mode = False
         self.debug_info = {}
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
 
     def enable_debug_mode(self, enabled=True):
         """Enable/disable debug mode for detailed TensorBoard logging"""
