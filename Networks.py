@@ -850,6 +850,7 @@ class AEGAN (nn.Module):
         loss_id = self.loss_identity_fn(Gy, y)
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
 
+        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         G_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
@@ -865,6 +866,7 @@ class AEGAN (nn.Module):
         # Compute discriminator loss
         D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
 
+        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         D_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         self.optimizer_D.step()
@@ -1599,7 +1601,8 @@ class CycleVAEGAN (nn.Module):
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
-            'G_loss': total_loss.item()
+            'G_loss': total_loss.item(),
+            'Gx': Gx.detach()  # Gx = G(x) for visualization
         }
 
     def validation_step(self, batch):
