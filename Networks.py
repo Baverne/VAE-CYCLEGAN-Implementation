@@ -1598,7 +1598,8 @@ class CycleVAEGAN (nn.Module):
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
-            'G_loss': total_loss.item()
+            'G_loss': total_loss.item(),
+            'Gx': Gx.detach()  # Gx = G(x) for visualization
         }
 
     def validation_step(self, batch):
