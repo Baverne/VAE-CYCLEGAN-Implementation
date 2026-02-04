@@ -374,7 +374,6 @@ class Autoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         loss_trans.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -531,7 +530,6 @@ class DoubleAutoencoder(nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -693,7 +691,6 @@ class VariationalAutoencoder (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         G_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -854,7 +851,6 @@ class AEGAN (nn.Module):
         loss_id = self.loss_identity_fn(Gy, y)
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
 
-        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         G_loss.backward()
         self.optimizer_G.step()
 
@@ -869,7 +865,6 @@ class AEGAN (nn.Module):
         # Compute discriminator loss
         D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
 
-        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         D_loss.backward()
         self.optimizer_D.step()
 
@@ -1166,9 +1161,6 @@ class CycleAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        # Gradient clipping to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1282,9 +1274,6 @@ class CycleVAE (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        # Gradient clipping to prevent explosion
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1423,7 +1412,6 @@ class CycleAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1584,7 +1572,7 @@ class CycleVAEGAN (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         # Return metrics
@@ -1599,7 +1587,6 @@ class CycleVAEGAN (nn.Module):
             'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
             'G_loss': total_loss.item(),
-            'Gx': Gx.detach()  # Gx = G(x) for visualization
         }
 
     def validation_step(self, batch):
@@ -1651,7 +1638,9 @@ class CycleVAEGAN (nn.Module):
                 'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
                 'loss_identity': loss_identity.item(),
                 'loss_kl': loss_kl.item(),
-                'output' : Gx.detach()
+                'G_loss': total_loss.item(),
+                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
+                'Fy': Fy.detach()   # Fy = F(y) translation B->A
             }
 
 ### Unpaired Datasets Networks ###
@@ -1719,7 +1708,6 @@ class CycleAE_unpaired(nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1824,7 +1812,6 @@ class CycleVAE_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -1943,7 +1930,6 @@ class CycleAEGAN_unpaired (nn.Module):
          # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
@@ -2081,7 +2067,6 @@ class CycleVAEGAN_unpaired (nn.Module):
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
         self.optimizer.step()
 
         # Return metrics
