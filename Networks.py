@@ -844,10 +844,6 @@ class AEGAN (nn.Module):
         # Forward pass for generator training
         Gx, Gy, DGx, Dy = self.forward(x, y)
         
-        # Discriminator statistics
-        d_y_mean = Dy.mean().item()
-        d_gx_mean = DGx.mean().item()
-        
         # Compute generator losses
         loss_trans = self.loss_trans_fn(Gx, y)
         loss_gan_g, loss_gan_g_real, loss_gan_g_fake = self.loss_gan_gen_fn(Dy, DGx)
@@ -855,6 +851,7 @@ class AEGAN (nn.Module):
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
 
         G_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
         self.optimizer_G.step()
 
         ### Train Discriminator
@@ -869,7 +866,13 @@ class AEGAN (nn.Module):
         D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
 
         D_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
         self.optimizer_D.step()
+        
+        # Discriminator statistics (computed after training, detached)
+        with torch.no_grad():
+            d_y_mean = Dy_detached.mean().item()
+            d_gx_mean = DGx_detached.mean().item()
 
         return {
             'G_loss': G_loss.item(),
