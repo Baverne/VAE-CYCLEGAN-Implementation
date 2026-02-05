@@ -87,10 +87,9 @@ class GANLossDiscriminator(nn.Module):
         self.mse_loss = nn.MSELoss()
     
     def forward(self, D_real, D_fake):
-        # (0.9 - D(x))^2 + D(0.1 - G(x))^2
-        # Using label smoothing: real labels are 0.9 instead of 1.0, fake labels are 0.1 instead of 0.0
-        real_loss = self.mse_loss(D_real, torch.full_like(D_real, 0.9))
-        fake_loss = self.mse_loss(D_fake, torch.full_like(D_fake, 0.1))
+        # (1 - D(x))^2 + D(0 - G(x))^2
+        real_loss = self.mse_loss(D_real, torch.full_like(D_real, 1))
+        fake_loss = self.mse_loss(D_fake, torch.full_like(D_fake, 0))
         total_loss = real_loss + fake_loss
         return total_loss, real_loss, fake_loss
 
