@@ -848,7 +848,7 @@ class AEGAN (nn.Module):
         G_loss = loss_trans + self.lambda_gan * loss_gan_g + self.lambda_identity * loss_id
 
         G_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.G.parameters(), max_norm=1.0)
+
         self.optimizer_G.step()
 
         ### Train Discriminator
@@ -863,7 +863,7 @@ class AEGAN (nn.Module):
         D_loss, D_loss_real, D_loss_fake = self.loss_gan_disc_fn(Dy_detached, DGx_detached)
 
         D_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
+
         self.optimizer_D.step()
         
         # Discriminator statistics (computed after training, detached)
@@ -1449,9 +1449,7 @@ class CycleAEGAN (nn.Module):
                   self.lambda_identity * loss_identity)
 
         G_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.F.parameters()) + list(self.G.parameters()), max_norm=1.0
-        )
+
         self.optimizer_G.step()
 
         ### Train Discriminators (DX and DY)
@@ -1473,9 +1471,7 @@ class CycleAEGAN (nn.Module):
         D_loss = loss_gan_d_x + loss_gan_d_y
 
         D_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.DX.parameters()) + list(self.DY.parameters()), max_norm=1.0
-        )
+        
         self.optimizer_D.step()
 
         # Discriminator statistics
@@ -1600,14 +1596,20 @@ class CycleVAEGAN (nn.Module):
 
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
+        Gy, _, _ = self.G(y)
         FGx, mu_FGx, logvar_FGx = self.F(Gx)
         Fy, mu_y, logvar_y = self.F(y)
+        Fx, _, _ = self.F(x)
         GFy, mu_GFy, logvar_GFy = self.G(Fy)
         DYGx = self.DY(Gx)
         DXFy = self.DX(Fy)
         DXx = self.DX(x)
         DYy = self.DY(y)
-        return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy, DYGx, DXFy, DXx, DYy # All Netework expect Gx as their first output
+        return Gx, FGx, Fy, GFy, \
+            mu_x, logvar_x, mu_FGx, \
+            logvar_FGx, mu_y, logvar_y, \
+            mu_GFy, logvar_GFy, DYGx, DXFy, \
+            DXx, DYy, Gy, Fx # All Netework expect Gx as their first output
     
     def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generators and Discriminators"""
@@ -1680,15 +1682,16 @@ class CycleVAEGAN (nn.Module):
         (Gx, FGx, Fy, GFy,
          mu_x, logvar_x, mu_FGx, logvar_FGx,
          mu_y, logvar_y, mu_GFy, logvar_GFy,
-         DYGx, DXFy, DXx, DYy) = self(x, y)
+         DYGx, DXFy, DXx, DYy, Gy, Fx) = self(x, y)
 
         # Compute generator losses
         loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
-        loss_gan_g = loss_gan_g_x + loss_gan_g_y
-        loss_identity = (self.loss_identity(x, y, FGx, GFy) +
-                         self.loss_identity(y, x, GFy, FGx))
+        loss_gan_g_fake = loss_gan_g_x_fake + loss_gan_g_y_fake
+        loss_gan_g_real = loss_gan_g_x_real + loss_gan_g_y_real
+        loss_gan_g = loss_gan_g_fake + loss_gan_g_real
+        loss_identity = (self.loss_identity(x, y, Fx, Gy))
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
@@ -1698,9 +1701,7 @@ class CycleVAEGAN (nn.Module):
                   self.lambda_kl * loss_kl)
 
         G_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.F.parameters()) + list(self.G.parameters()), max_norm=1.0
-        )
+
         self.optimizer_G.step()
 
         ### Train Discriminators (DX and DY)
@@ -1722,9 +1723,7 @@ class CycleVAEGAN (nn.Module):
         D_loss = loss_gan_d_x + loss_gan_d_y
 
         D_loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            list(self.DX.parameters()) + list(self.DY.parameters()), max_norm=1.0
-        )
+
         self.optimizer_D.step()
 
         # Discriminator statistics
