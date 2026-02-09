@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 # Import networks and data manager
 from Networks import *
-from Data_Manager import HypersimDataset, UnpairedImageDataset
+from Data_Manager import HypersimDataset, UnpairedImageDataset, SatelliteMapDataset
 
 
 def discover_runs(runs_dir='runs'):
@@ -96,6 +96,12 @@ def create_model(architecture):
     elif architecture == 'cyclevaegan':
         model = CycleVAEGAN()
         print(f"Created Cycle VAE-GAN")
+    elif architecture == 'doubleae':
+        model = DoubleAutoencoder()
+        print(f"Created Double Autoencoder")
+    elif architecture == 'doublevae':
+        model = DoubleVariationalAutoencoder()
+        print(f"Created Double Variational Autoencoder")
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
     return model
@@ -148,7 +154,6 @@ def create_test_transform_unpaired(image_size=256):
         transforms.Resize(image_size),
         transforms.CenterCrop(image_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
     ])
 
 
@@ -202,8 +207,6 @@ def create_test_dataloader_paired(args, num_samples=None):
 def create_test_dataloader_unpaired(args, num_samples=None):
     """
     Create test dataloader for unpaired dataset.
-
-    Note: UnpairedImageDataset returns 'A' and 'B' keys.
     """
     test_transform = create_test_transform_unpaired(args.get('image_size', 256))
 
@@ -227,13 +230,48 @@ def create_test_dataloader_unpaired(args, num_samples=None):
     )
 
 
+def create_test_dataloader_maps(args, num_samples=None):
+    """
+    Create test dataloader for satellite-to-map dataset.
+
+    Args:
+        args: dict with 'data_dir', 'image_size'
+        num_samples: Limit number of samples (None for all)
+
+    Returns:
+        DataLoader for testing
+    """
+    test_transform = transforms.Compose([
+        transforms.Resize((args.get('image_size', 256), args.get('image_size', 256))),
+        transforms.ToTensor(),
+    ])
+
+    test_dataset = SatelliteMapDataset(
+        root_dir=args['data_dir'] + "/maps",
+        split="val",
+        transform=test_transform
+    )
+
+    if num_samples is not None and num_samples < len(test_dataset):
+        indices = list(range(num_samples))
+        test_dataset = torch.utils.data.Subset(test_dataset, indices)
+
+    return DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.get('num_workers', 4),
+        pin_memory=True
+    )
+
+
 def run_inference(model, batch, architecture, device, unpaired=False):
     """
     Run inference on a batch, handling different model architectures.
 
     Args:
         model: The loaded model
-        batch: Dict with 'x', 'y' (or 'A', 'B' for unpaired)
+        batch: Dict with 'x', 'y' (or legacy 'A', 'B' for unpaired)
         architecture: Architecture name string
         device: torch device
         unpaired: Whether this is unpaired data
@@ -243,7 +281,7 @@ def run_inference(model, batch, architecture, device, unpaired=False):
     """
     model.eval()
     with torch.no_grad():
-        # Handle unpaired batch keys ('A', 'B' -> 'x', 'y')
+        # Handle legacy unpaired batch keys ('A', 'B' -> 'x', 'y')
         if unpaired or 'A' in batch:
             x = batch['A'].to(device)
             y = batch['B'].to(device)
@@ -251,8 +289,8 @@ def run_inference(model, batch, architecture, device, unpaired=False):
             x = batch['x'].to(device)
             y = batch['y'].to(device)
 
-        # Cycle-based models need both x and y
-        if architecture.startswith('cycle'):
+        # Models that need both x and y for forward pass
+        if architecture.startswith('cycle') or architecture.startswith('double'):
             output = model(x, y)[0]
         else:
             output = model(x)[0]
@@ -265,12 +303,9 @@ def denormalize_for_display(tensor, unpaired=False):
     Convert tensor to displayable range [0, 1].
 
     For paired data: images are already in [0,1]
-    For unpaired data: images are normalized to [-1,1], need to convert back
+    For unpaired data: images are already in [0,1]
     """
-    if unpaired:
-        return tensor * 0.5 + 0.5
-    else:
-        return tensor.clamp(0, 1)
+    return tensor.clamp(0, 1)
 
 
 def tensor_to_numpy_image(tensor):
@@ -471,8 +506,11 @@ def evaluate_model_group(runs, device, output_dir, num_samples, num_comparison_f
         ref_args = models[0]['run']['args']
 
         print("\nCreating test dataloader...")
+        dataset_type = ref_args.get('dataset', 'unpaired' if ref_args.get('unpaired', False) else 'paired')
         if unpaired:
             dataloader = create_test_dataloader_unpaired(ref_args, num_samples)
+        elif dataset_type == 'maps':
+            dataloader = create_test_dataloader_maps(ref_args, num_samples)
         else:
             dataloader = create_test_dataloader_paired(ref_args, num_samples)
 
@@ -575,12 +613,22 @@ def evaluate_models(args):
         runs = [r for r in runs if r['architecture'] in args.architectures]
         print(f"\nFiltered to {len(runs)} models matching architectures: {args.architectures}")
 
-    # Group runs by data type (paired vs unpaired)
-    paired_runs = [r for r in runs if not r['args'].get('unpaired', False)]
-    unpaired_runs = [r for r in runs if r['args'].get('unpaired', False)]
+    # Determine dataset type for each run (handles legacy 'unpaired' flag and new 'dataset' key)
+    def get_dataset_type(run_args):
+        if 'dataset' in run_args:
+            return run_args['dataset']
+        # Legacy format: convert 'unpaired' boolean to dataset string
+        return 'unpaired' if run_args.get('unpaired', False) else 'paired'
+
+    # Group runs by dataset type
+    paired_runs = [r for r in runs if get_dataset_type(r['args']) == 'paired']
+    unpaired_runs = [r for r in runs if get_dataset_type(r['args']) == 'unpaired']
+    maps_runs = [r for r in runs if get_dataset_type(r['args']) == 'maps']
+
+    dataset_filter = getattr(args, 'dataset_filter', None)
 
     # Process paired models
-    if paired_runs and not args.unpaired_only:
+    if paired_runs and dataset_filter in (None, 'paired'):
         print(f"\n{'='*60}")
         print(f"Evaluating {len(paired_runs)} paired dataset models")
         print(f"{'='*60}")
@@ -595,7 +643,7 @@ def evaluate_models(args):
         )
 
     # Process unpaired models
-    if unpaired_runs and not args.paired_only:
+    if unpaired_runs and dataset_filter in (None, 'unpaired'):
         print(f"\n{'='*60}")
         print(f"Evaluating {len(unpaired_runs)} unpaired dataset models")
         print(f"{'='*60}")
@@ -607,6 +655,21 @@ def evaluate_models(args):
             args.num_samples,
             args.num_comparison_figures,
             unpaired=True
+        )
+
+    # Process maps models
+    if maps_runs and dataset_filter in (None, 'maps'):
+        print(f"\n{'='*60}")
+        print(f"Evaluating {len(maps_runs)} maps dataset models")
+        print(f"{'='*60}")
+
+        evaluate_model_group(
+            maps_runs,
+            device,
+            output_dir / 'maps',
+            args.num_samples,
+            args.num_comparison_figures,
+            unpaired=False
         )
 
     print(f"\n{'='*60}")
@@ -625,10 +688,9 @@ if __name__ == '__main__':
     # Filter options
     parser.add_argument('--architectures', type=str, nargs='+', default=None,
                         help='Filter to specific architectures (e.g., autoencoder vae aegan)')
-    parser.add_argument('--paired_only', action='store_true',
-                        help='Only evaluate paired dataset models')
-    parser.add_argument('--unpaired_only', action='store_true',
-                        help='Only evaluate unpaired dataset models')
+    parser.add_argument('--dataset_filter', type=str, default=None,
+                        choices=['paired', 'unpaired', 'maps'],
+                        help='Only evaluate models trained on this dataset')
 
     # Test configuration
     parser.add_argument('--num_samples', type=int, default=20,

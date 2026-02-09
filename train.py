@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 # Import networks, losses, and data manager
 from Networks import *
-from Data_Manager import HypersimDataset, UnpairedImageDataset
+from Data_Manager import HypersimDataset, UnpairedImageDataset, SatelliteMapDataset
 
 
 def create_model(architecture):
@@ -41,6 +41,9 @@ def create_model(architecture):
     elif architecture == 'doubleae':
         model = DoubleAutoencoder()
         print(f"Created Double Autoencoder (shared encoder, two decoders)")
+    elif architecture == 'doublevae':
+        model = DoubleVariationalAutoencoder()
+        print(f"Created Double Variational Autoencoder (shared encoder, separate VAE blocks, two decoders)")
     elif architecture == 'vae':
         model = VariationalAutoencoder()
         print(f"Created Variational Autoencoder")
@@ -172,6 +175,124 @@ def load_pretrained_doubleae_to_cycleae(cycleae_model, doubleae_checkpoint_path,
     print("Successfully loaded DoubleAutoencoder weights into CycleAE")
     print("  G (A->B): encoder (shared) + decoder_B (target modality)")
     print("  F (B->A): encoder (shared) + decoder_A (source modality)")
+
+
+def load_pretrained_doublevae_to_cyclevae(cycle_model, doublevae_checkpoint_path, device):
+    """
+    Load pretrained DoubleVariationalAutoencoder weights into a CycleVAE or CycleVAEGAN model.
+
+    The DoubleVariationalAutoencoder has:
+    - encoder (shared)
+    - vae_encoder_block_A, vae_decoder_block_A (VAE blocks for source modality)
+    - vae_encoder_block_B, vae_decoder_block_B (VAE blocks for target modality)
+    - decoder_A (reconstructs source modality)
+    - decoder_B (reconstructs target modality)
+
+    The CycleVAE / CycleVAEGAN has:
+    - G = VariationalAutoencoder (encoder + variational_encoder_block + variational_decoder_block + decoder)
+    - F = VariationalAutoencoder (encoder + variational_encoder_block + variational_decoder_block + decoder)
+
+    Mapping strategy:
+    - G.encoder <- encoder, G.variational_encoder_block <- vae_encoder_block_B,
+      G.variational_decoder_block <- vae_decoder_block_B, G.decoder <- decoder_B
+    - F.encoder <- encoder, F.variational_encoder_block <- vae_encoder_block_A,
+      F.variational_decoder_block <- vae_decoder_block_A, F.decoder <- decoder_A
+
+    Args:
+        cycle_model: CycleVAE or CycleVAEGAN model to initialize
+        doublevae_checkpoint_path: Path to DoubleVariationalAutoencoder checkpoint
+        device: Device to load the checkpoint on
+    """
+    if not os.path.exists(doublevae_checkpoint_path):
+        raise FileNotFoundError(f"No DoubleVariationalAutoencoder checkpoint found at {doublevae_checkpoint_path}")
+
+    # Load checkpoint
+    print(f"Loading DoubleVariationalAutoencoder weights from {doublevae_checkpoint_path}")
+    checkpoint = torch.load(doublevae_checkpoint_path, map_location=device)
+    doublevae_state_dict = checkpoint['model_state_dict']
+
+    # Extract components from DoubleVariationalAutoencoder state dict
+    encoder_state = {}
+    vae_encoder_block_A_state = {}
+    vae_encoder_block_B_state = {}
+    vae_decoder_block_A_state = {}
+    vae_decoder_block_B_state = {}
+    decoder_A_state = {}
+    decoder_B_state = {}
+
+    for key, value in doublevae_state_dict.items():
+        if key.startswith('encoder.'):
+            new_key = key[len('encoder.'):]
+            encoder_state[new_key] = value
+        elif key.startswith('vae_encoder_block_A.'):
+            new_key = key[len('vae_encoder_block_A.'):]
+            vae_encoder_block_A_state[new_key] = value
+        elif key.startswith('vae_encoder_block_B.'):
+            new_key = key[len('vae_encoder_block_B.'):]
+            vae_encoder_block_B_state[new_key] = value
+        elif key.startswith('vae_decoder_block_A.'):
+            new_key = key[len('vae_decoder_block_A.'):]
+            vae_decoder_block_A_state[new_key] = value
+        elif key.startswith('vae_decoder_block_B.'):
+            new_key = key[len('vae_decoder_block_B.'):]
+            vae_decoder_block_B_state[new_key] = value
+        elif key.startswith('decoder_A.'):
+            new_key = key[len('decoder_A.'):]
+            decoder_A_state[new_key] = value
+        elif key.startswith('decoder_B.'):
+            new_key = key[len('decoder_B.'):]
+            decoder_B_state[new_key] = value
+
+    # Load into CycleVAE / CycleVAEGAN
+    # G translates A->B, so use encoder + vae_block_B + decoder_B
+    print("Loading encoder + vae_block_B + decoder_B into G (A->B translation)")
+    cycle_model.G.encoder.load_state_dict(encoder_state)
+    cycle_model.G.variational_encoder_block.load_state_dict(vae_encoder_block_B_state)
+    cycle_model.G.variational_decoder_block.load_state_dict(vae_decoder_block_B_state)
+    cycle_model.G.decoder.load_state_dict(decoder_B_state)
+
+    # F translates B->A, so use encoder + vae_block_A + decoder_A
+    print("Loading encoder + vae_block_A + decoder_A into F (B->A translation)")
+    cycle_model.F.encoder.load_state_dict(encoder_state)
+    cycle_model.F.variational_encoder_block.load_state_dict(vae_encoder_block_A_state)
+    cycle_model.F.variational_decoder_block.load_state_dict(vae_decoder_block_A_state)
+    cycle_model.F.decoder.load_state_dict(decoder_A_state)
+
+    # Sanity check: verify G and F aren't swapped
+    print("Running sanity check on weight transfer...")
+    for (name_cycle, param_cycle), (name_src, param_src) in zip(
+        cycle_model.G.decoder.state_dict().items(),
+        decoder_B_state.items()
+    ):
+        assert torch.equal(param_cycle, param_src), \
+            f"G.decoder mismatch at {name_cycle} — G and F may be swapped!"
+
+    for (name_cycle, param_cycle), (name_src, param_src) in zip(
+        cycle_model.F.decoder.state_dict().items(),
+        decoder_A_state.items()
+    ):
+        assert torch.equal(param_cycle, param_src), \
+            f"F.decoder mismatch at {name_cycle} — G and F may be swapped!"
+
+    for (name_cycle, param_cycle), (name_src, param_src) in zip(
+        cycle_model.G.variational_decoder_block.state_dict().items(),
+        vae_decoder_block_B_state.items()
+    ):
+        assert torch.equal(param_cycle, param_src), \
+            f"G.variational_decoder_block mismatch at {name_cycle} — G and F may be swapped!"
+
+    for (name_cycle, param_cycle), (name_src, param_src) in zip(
+        cycle_model.F.variational_decoder_block.state_dict().items(),
+        vae_decoder_block_A_state.items()
+    ):
+        assert torch.equal(param_cycle, param_src), \
+            f"F.variational_decoder_block mismatch at {name_cycle} — G and F may be swapped!"
+
+    print("Sanity check passed: G uses B components, F uses A components")
+
+    print("Successfully loaded DoubleVariationalAutoencoder weights")
+    print("  G (A->B): encoder (shared) + vae_block_B + decoder_B (target modality)")
+    print("  F (B->A): encoder (shared) + vae_block_A + decoder_A (source modality)")
 
 
 def truncate_tensorboard_events(tensorboard_dir, max_epoch):
@@ -408,10 +529,6 @@ def create_dataloaders_unpaired(args):
         transforms.Resize(args.image_size),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.5, 0.5, 0.5],
-            std=[0.5, 0.5, 0.5]
-        )
     ])
     train_dataset = UnpairedImageDataset(
         root_dir=args.data_dir + "/unpaired",
@@ -445,7 +562,67 @@ def create_dataloaders_unpaired(args):
     print(f"Testing samples: {len(test_dataset)}")
 
     return train_loader, test_loader
-    
+
+
+def create_dataloaders_maps(args):
+    """
+    Create train and test dataloaders for satellite-to-map dataset.
+    Images are in [0,1] range (ToTensor only, no Normalize).
+
+    Returns:
+        train_loader: DataLoader for training
+        test_loader: DataLoader for testing
+    """
+    maps_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomResizedCrop(
+            size=args.image_size,
+            scale=(0.33, 1.0),
+            ratio=(1, 1),
+            interpolation=transforms.InterpolationMode.BICUBIC
+        ),
+        transforms.ToTensor(),  # [0,255] -> [0,1]
+    ])
+
+    maps_test_transform = transforms.Compose([
+        transforms.Resize((args.image_size, args.image_size)),
+        transforms.ToTensor(),
+    ])
+
+    train_dataset = SatelliteMapDataset(
+        root_dir=args.data_dir + "/maps",
+        split="train",
+        transform=maps_transform
+    )
+
+    test_dataset = SatelliteMapDataset(
+        root_dir=args.data_dir + "/maps",
+        split="val",
+        transform=maps_test_transform
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    print(f"Training samples: {len(train_dataset)}")
+    print(f"Testing samples: {len(test_dataset)}")
+
+    return train_loader, test_loader
+
+
 def load_component_checkpoint(component, filename, device):
     """
     Load weights from an Autoencoder checkpoint into a specific component (G or F)
@@ -467,7 +644,19 @@ def main(args):
     if args.architecture in ['autoencoder', 'vae']:
         if args.source_modality != args.target_modality:
             raise ValueError("Source and target modalities should be the same for Autoencoder/VAE architectures.")
-    
+
+    # Set default modality names based on dataset
+    dataset_modality_defaults = {
+        'paired':   ('depth', 'normal'),
+        'unpaired': ('summer', 'winter'),
+        'maps':     ('satellite', 'map'),
+    }
+    default_source, default_target = dataset_modality_defaults[args.dataset]
+    if args.source_modality is None:
+        args.source_modality = default_source
+    if args.target_modality is None:
+        args.target_modality = default_target
+
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     print(f"Using device: {device}")
@@ -489,7 +678,7 @@ def main(args):
         print(f"Resuming run in directory: {output_dir}")
     else:
         # Create new output directory with timestamp
-        type_data = "unpaired" if args.unpaired else "paired"
+        type_data = args.dataset
         timestamp = datetime.now().strftime('%m%d_%H%M')
         output_dir = Path(args.output_dir) / f"{args.architecture}_{timestamp}_{args.source_modality}_to_{args.target_modality}_{type_data}"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -512,16 +701,23 @@ def main(args):
     print(f"TensorBoard logs: {tensorboard_dir}")
     print(f"Run 'tensorboard --logdir={tensorboard_dir}' to visualize")
 
-    # Create dataloaders (paired or unpaired)
-    if args.unpaired:
+    # Create dataloaders
+    if args.dataset == 'unpaired':
         train_loader, test_loader = create_dataloaders_unpaired(args)
         print("Using unpaired dataset (summer2winter)")
+    elif args.dataset == 'maps':
+        train_loader, test_loader = create_dataloaders_maps(args)
+        print("Using maps dataset (satellite-to-map)")
     else:
         train_loader, test_loader = create_dataloaders_paired(args)
         print("Using paired dataset (hypersim)")
     
     # Create model
     model = create_model(args.architecture).to(device)
+
+    # Validate pretrained args mutual exclusivity
+    if args.pretrained_doubleae is not None and args.pretrained_doublevae is not None:
+        raise ValueError("Cannot specify both --pretrained_doubleae and --pretrained_doublevae")
 
     # Load pretrained DoubleAutoencoder weights into CycleAE if specified
     if args.pretrained_doubleae is not None:
@@ -531,13 +727,22 @@ def main(args):
         load_pretrained_doubleae_to_cycleae(model, args.pretrained_doubleae, device)
         print("Pretraining loaded successfully\n")
 
+    # Load pretrained DoubleVariationalAutoencoder weights into CycleVAE/CycleVAEGAN if specified
+    if args.pretrained_doublevae is not None:
+        if args.architecture not in ['cyclevae', 'cyclevaegan']:
+            raise ValueError(f"--pretrained_doublevae can only be used with CycleVAE or CycleVAEGAN architectures, not {args.architecture}")
+        print(f"\nInitializing {args.architecture} from pretrained DoubleVariationalAutoencoder...")
+        load_pretrained_doublevae_to_cyclevae(model, args.pretrained_doublevae, device)
+        print("Pretraining loaded successfully\n")
+
     # Configure model optimizers and losses
     model.configure_optimizers(lr=args.lr) # Each model will create its own optimizers
     model.configure_loss(
         lambda_kl=args.lambda_kl,
         lambda_gan=args.lambda_gan,
         lambda_identity=args.lambda_identity,
-        lambda_cycle=args.lambda_cycle)
+        lambda_cycle=args.lambda_cycle,
+        lambda_recon=args.lambda_recon)
     
     # Load checkpoint if resuming
     start_epoch = 0
@@ -619,17 +824,18 @@ def main(args):
                 writer.add_scalar(f'Loss_Components_test/{key}', value, epoch)
             
             # Log test images to TensorBoard
-            test_x_vis = test_x[:4] * 0.5 + 0.5
-            test_y_vis = test_y[:4] * 0.5 + 0.5
-            test_Gx_vis = test_Gx[:4] * 0.5 + 0.5
-            
+            # All datasets are in [0,1] range
+            test_x_vis = test_x[:4].clamp(0, 1)
+            test_y_vis = test_y[:4].clamp(0, 1)
+            test_Gx_vis = test_Gx[:4].clamp(0, 1)
+
             writer.add_images(f'{args.source_modality}/test_x', test_x_vis, epoch)
             writer.add_images(f'{args.target_modality}/test_y', test_y_vis, epoch)
             writer.add_images(f'{args.target_modality}/test_Gx', test_Gx_vis, epoch)
-            
+
             # Log Fy if available (for Cycle/Double architectures)
             if test_Fy is not None:
-                test_Fy_vis = test_Fy[:4] * 0.5 + 0.5
+                test_Fy_vis = test_Fy[:4].clamp(0, 1)
                 writer.add_images(f'{args.source_modality}/test_Fy', test_Fy_vis, epoch)
             
             # Save best model
@@ -659,7 +865,7 @@ if __name__ == '__main__':
     
     # Architecture selection
     parser.add_argument('--architecture', type=str, default='autoencoder',
-                        choices=['autoencoder', 'doubleae', 'vae', 'aegan',
+                        choices=['autoencoder', 'doubleae', 'doublevae', 'vae', 'aegan',
                                  'vaegan', 'cycleae', 'cyclevae',
                                  'cycleaegan', 'cyclevaegan'],
                         help='Network architecture to train')
@@ -673,20 +879,23 @@ if __name__ == '__main__':
                         help='Path to a pretrained Autoencoder checkpoint to initialize F (CycleAE only)')
     parser.add_argument('--pretrained_doubleae', type=str, default=None,
                         help='Path to a pretrained DoubleAutoencoder checkpoint to initialize CycleAE (both G and F)')
+    parser.add_argument('--pretrained_doublevae', type=str, default=None,
+                        help='Path to a pretrained DoubleVariationalAutoencoder checkpoint to initialize CycleVAE/CycleVAEGAN (both G and F)')
     
     # Data parameters
     parser.add_argument('--data_dir', type=str, default='datasets',
                         help='Path to dataset directory')
-    parser.add_argument('--source_modality', type=str, default='depth',
-                        help='Source modality (input)')
-    parser.add_argument('--target_modality', type=str, default='normal',
-                        help='Target modality (output)')
+    parser.add_argument('--source_modality', type=str, default=None,
+                        help='Source modality (input). Defaults: paired=depth, unpaired=summer, maps=satellite')
+    parser.add_argument('--target_modality', type=str, default=None,
+                        help='Target modality (output). Defaults: paired=normal, unpaired=winter, maps=map')
     parser.add_argument('--image_size', type=int, default=256,
                         help='Image size for training')
     parser.add_argument('--test_split', type=float, default=0.1,
                         help='Test split ratio')
-    parser.add_argument('--unpaired', action='store_true',
-                        help='Use unpaired dataset (summer2winter) instead of paired hypersim dataset')
+    parser.add_argument('--dataset', type=str, default='paired',
+                        choices=['paired', 'unpaired', 'maps'],
+                        help='Dataset to use: paired (hypersim), unpaired (summer2winter), or maps (satellite-to-map)')
     
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=5,
@@ -705,6 +914,8 @@ if __name__ == '__main__':
                         help='Identity loss weight for AEGAN')
     parser.add_argument('--lambda_cycle', type=float, default=10.0,
                         help='Cycle consistency loss weight for Cycle architectures')
+    parser.add_argument('--lambda_recon', type=float, default=1.0,
+                        help='Reconstruction/translation loss weight (set to 0 to disable)')
     
     # Checkpointing and output
     parser.add_argument('--output_dir', type=str, default='runs',

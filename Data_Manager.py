@@ -5,6 +5,7 @@ Provides PyTorch DataLoader with support for multiple modalities and data augmen
 """
 
 import os
+import random
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Callable
 import numpy as np
@@ -277,6 +278,69 @@ class HypersimDataset(Dataset):
         return filtered_dataset
 
 
+class SatelliteMapDataset(Dataset):
+    """
+    Paired satellite-to-map dataset (pix2pix maps format).
+
+    Each image is 1200x600: left half is satellite photo, right half is map.
+
+    Directory structure:
+        root_dir/
+            train/
+                1.jpg, 2.jpg, ...
+            val/
+                1.jpg, 2.jpg, ...
+
+    Returns:
+        dict with 'x' (satellite, left half) and 'y' (map, right half)
+    """
+
+    def __init__(self, root_dir, split="train", transform=None):
+        self.root_dir = root_dir
+        self.split = split
+        self.transform = transform
+
+        self.image_dir = os.path.join(root_dir, split)
+        if not os.path.isdir(self.image_dir):
+            raise ValueError(f"Directory not found: {self.image_dir}")
+
+        self.images = sorted([
+            f for f in os.listdir(self.image_dir)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+
+        if len(self.images) == 0:
+            raise ValueError(f"No images found in {self.image_dir}")
+
+        print(f"  Loaded {split} split with {len(self.images)} samples")
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.image_dir, self.images[idx])
+        img = Image.open(img_path).convert('RGB')
+
+        # Split image: left half = satellite (x), right half = map (y)
+        w, h = img.size  # 1200, 600
+        half_w = w // 2
+
+        satellite = img.crop((0, 0, half_w, h))      # left half
+        map_img = img.crop((half_w, 0, w, h))         # right half
+
+        # Apply transforms with same random state for both halves
+        if self.transform is not None:
+            random_state = torch.get_rng_state()
+            satellite = self.transform(satellite)
+            torch.set_rng_state(random_state)
+            map_img = self.transform(map_img)
+        else:
+            satellite = transforms.ToTensor()(satellite)
+            map_img = transforms.ToTensor()(map_img)
+
+        return {'x': satellite, 'y': map_img}
+
+
 class UnpairedImageDataset(Dataset):
     def __init__(
         self,
@@ -324,13 +388,13 @@ class UnpairedImageDataset(Dataset):
             img_B = self.transform(img_B)
 
         sample = {
-            "A": img_A,
-            "B": img_B
+            "x": img_A,
+            "y": img_B
         }
 
         if self.return_paths:
-            sample["A_path"] = img_A_path
-            sample["B_path"] = img_B_path
+            sample["x_path"] = img_A_path
+            sample["y_path"] = img_B_path
 
         return sample
 

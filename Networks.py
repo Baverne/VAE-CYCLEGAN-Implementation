@@ -564,15 +564,19 @@ class DoubleAutoencoder(nn.Module):
             loss_recon_A = self.loss_fn(Gx, x)
             loss_recon_B = self.loss_fn(Gy, y)
             total_loss = loss_recon_A + loss_recon_B
-            
+
+            # Compute translations for visualization (A->B and B->A)
+            Gx_translated = self.translate_A_to_B(x)  # x -> target modality
+            Fy_translated = self.translate_B_to_A(y)  # y -> source modality
+
             # Return metrics
             return {
                 'G_loss': total_loss.item(),
                 'total_loss': total_loss.item(),
                 'loss_recon_A': loss_recon_A.item(),
                 'loss_recon_B': loss_recon_B.item(),
-                'Gx': Gx,  # Reconstruction of source modality
-                'Fy': Gy   # Reconstruction of target modality
+                'Gx': Gx_translated,  # Translation A->B (looks like target)
+                'Fy': Fy_translated   # Translation B->A (looks like source)
             }
     
     def create_cycle_ae(self):
@@ -599,6 +603,254 @@ class DoubleAutoencoder(nn.Module):
         cycle_ae.F.decoder.load_state_dict(self.decoder_A.state_dict())
         
         return cycle_ae
+
+
+class DoubleVariationalAutoencoder(nn.Module):
+    """
+    Double Variational Autoencoder with shared encoder, separate VAE blocks,
+    and separate decoders for two modalities.
+
+    This architecture is designed for pretraining before CycleVAE/CycleVAEGAN:
+    - One shared encoder learns a common feature representation
+    - Separate VariationalEncoderBlock for A and B (each modality has its own latent distribution)
+    - Separate VariationalDecoderBlock for A and B
+    - Separate Decoder for A and B
+
+    After training, the components can be transferred to CycleVAE or CycleVAEGAN:
+    - G (A->B): encoder + vae_encoder_block_B + vae_decoder_block_B + decoder_B
+    - F (B->A): encoder + vae_encoder_block_A + vae_decoder_block_A + decoder_A
+
+    The batch should contain:
+    - 'x': images from modality A (source)
+    - 'y': images from modality B (target)
+    """
+    def __init__(self, latent_dim=64):
+        super(DoubleVariationalAutoencoder, self).__init__()
+        # Shared encoder
+        self.encoder = Encoder()
+
+        # Separate VAE blocks for each modality
+        self.vae_encoder_block_A = VariationalEncoderBlock(in_channels=1024, latent_dim=latent_dim)
+        self.vae_encoder_block_B = VariationalEncoderBlock(in_channels=1024, latent_dim=latent_dim)
+        self.vae_decoder_block_A = VariationalDecoderBlock(latent_dim=latent_dim, out_channels=1024)
+        self.vae_decoder_block_B = VariationalDecoderBlock(latent_dim=latent_dim, out_channels=1024)
+
+        # Separate decoders for each modality
+        self.decoder_A = Decoder()  # Reconstructs source modality
+        self.decoder_B = Decoder()  # Reconstructs target modality
+
+        # loss related attributes to be set in "configure_loss"
+        self.optimizer = None
+        self.loss_trans_fn = None
+        self.loss_kl_fn = None
+        self.lambda_kl = 0
+
+        # Apply proper weight initialization
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """Initialize weights using Kaiming initialization for ReLU networks"""
+        if isinstance(module, nn.Conv2d):
+            nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.InstanceNorm2d):
+            if module.weight is not None:
+                nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def forward(self, x, y):
+        """
+        Forward pass for both modalities.
+
+        Args:
+            x: Input from modality A (source)
+            y: Input from modality B (target)
+
+        Returns:
+            Gx: Reconstruction of x (x -> encoder -> vae_A -> decoder_A -> Gx)
+            Gy: Reconstruction of y (y -> encoder -> vae_B -> decoder_B -> Gy)
+            mu_x, logvar_x: Latent distribution parameters for modality A
+            mu_y, logvar_y: Latent distribution parameters for modality B
+        """
+        # Encode both modalities with shared encoder
+        encoded_x = self.encoder(x)
+        encoded_y = self.encoder(y)
+
+        # Pass through respective VAE blocks
+        z_x, mu_x, logvar_x = self.vae_encoder_block_A(encoded_x)
+        z_y, mu_y, logvar_y = self.vae_encoder_block_B(encoded_y)
+
+        # Decode latent representations
+        decoded_x = self.vae_decoder_block_A(z_x)
+        decoded_y = self.vae_decoder_block_B(z_y)
+
+        # Final decoding
+        Gx = self.decoder_A(decoded_x)  # Reconstruct source
+        Gy = self.decoder_B(decoded_y)  # Reconstruct target
+
+        return Gx, Gy, mu_x, logvar_x, mu_y, logvar_y
+
+    def translate_A_to_B(self, x):
+        """Translate from modality A to B (uses encoder + vae_B + decoder_B)"""
+        encoded = self.encoder(x)
+        z, _, _ = self.vae_encoder_block_B(encoded)
+        decoded = self.vae_decoder_block_B(z)
+        return self.decoder_B(decoded)
+
+    def translate_B_to_A(self, y):
+        """Translate from modality B to A (uses encoder + vae_A + decoder_A)"""
+        encoded = self.encoder(y)
+        z, _, _ = self.vae_encoder_block_A(encoded)
+        decoded = self.vae_decoder_block_A(z)
+        return self.decoder_A(decoded)
+
+    def create_cycle_vae(self):
+        """
+        Create a CycleVAE from this pretrained DoubleVariationalAutoencoder.
+
+        The resulting CycleVAE will have:
+        - G (A->B): encoder + vae_encoder_block_B + vae_decoder_block_B + decoder_B
+        - F (B->A): encoder + vae_encoder_block_A + vae_decoder_block_A + decoder_A
+
+        Note: Both G and F share the same initial encoder weights (copied, not shared).
+
+        Returns:
+            CycleVAE: A new CycleVAE with weights initialized from this model
+        """
+        cycle_vae = CycleVAE()
+
+        # G translates A->B: encoder + vae_block_B + decoder_B
+        cycle_vae.G.encoder.load_state_dict(self.encoder.state_dict())
+        cycle_vae.G.variational_encoder_block.load_state_dict(self.vae_encoder_block_B.state_dict())
+        cycle_vae.G.variational_decoder_block.load_state_dict(self.vae_decoder_block_B.state_dict())
+        cycle_vae.G.decoder.load_state_dict(self.decoder_B.state_dict())
+
+        # F translates B->A: encoder + vae_block_A + decoder_A
+        cycle_vae.F.encoder.load_state_dict(self.encoder.state_dict())
+        cycle_vae.F.variational_encoder_block.load_state_dict(self.vae_encoder_block_A.state_dict())
+        cycle_vae.F.variational_decoder_block.load_state_dict(self.vae_decoder_block_A.state_dict())
+        cycle_vae.F.decoder.load_state_dict(self.decoder_A.state_dict())
+
+        return cycle_vae
+
+    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
+        """Configure optimizer for training"""
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
+        return self.optimizer
+
+    def save_optimizer_states(self):
+        """Save optimizer states for checkpointing"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        return {'optimizer': self.optimizer.state_dict()}
+
+    def load_optimizer_states(self, states):
+        """Load optimizer states from checkpoint"""
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+        if 'optimizer' in states:
+            self.optimizer.load_state_dict(states['optimizer'])
+        else:
+            raise KeyError("optimizer state not found in states")
+
+    def configure_loss(self, **kwargs):
+        """Configure loss functions"""
+        self.loss_trans_fn = TranslationLoss()
+        self.loss_kl_fn = KLDivergenceLoss()
+        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+
+    def training_step(self, batch):
+        """
+        Training step for DoubleVariationalAutoencoder.
+
+        Args:
+            batch: dict with 'x' (source modality) and 'y' (target modality)
+
+        Returns:
+            dict with loss metrics
+        """
+        if self.loss_trans_fn is None or self.loss_kl_fn is None:
+            raise ValueError("Loss functions have not been configured yet.")
+        if self.optimizer is None:
+            raise ValueError("Optimizer has not been configured yet.")
+
+        x = batch['x']
+        y = batch['y']
+
+        # Forward pass
+        Gx, Gy, mu_x, logvar_x, mu_y, logvar_y = self(x, y)
+
+        # Compute losses
+        loss_recon_A = self.loss_trans_fn(Gx, x)  # Reconstruction of source
+        loss_recon_B = self.loss_trans_fn(Gy, y)  # Reconstruction of target
+        loss_kl_A = self.loss_kl_fn(mu_x, logvar_x)
+        loss_kl_B = self.loss_kl_fn(mu_y, logvar_y)
+        loss_kl = loss_kl_A + loss_kl_B
+
+        total_loss = loss_recon_A + loss_recon_B + self.lambda_kl * loss_kl
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+
+        # Return metrics
+        return {
+            'G_loss': total_loss.item(),
+            'loss_recon_A': loss_recon_A.item(),
+            'loss_recon_B': loss_recon_B.item(),
+            'loss_kl': loss_kl.item(),
+            'loss_kl_A': loss_kl_A.item(),
+            'loss_kl_B': loss_kl_B.item(),
+            'total_loss': total_loss.item()
+        }
+
+    def validation_step(self, batch):
+        """
+        Validation step for DoubleVariationalAutoencoder.
+
+        Args:
+            batch: dict with 'x' (source modality) and 'y' (target modality)
+
+        Returns:
+            dict with loss metrics and output
+        """
+        if self.loss_trans_fn is None or self.loss_kl_fn is None:
+            raise ValueError("Loss functions have not been configured yet.")
+
+        with torch.no_grad():
+            x = batch['x']
+            y = batch['y']
+
+            # Forward pass
+            Gx, Gy, mu_x, logvar_x, mu_y, logvar_y = self(x, y)
+
+            # Compute losses
+            loss_recon_A = self.loss_trans_fn(Gx, x)
+            loss_recon_B = self.loss_trans_fn(Gy, y)
+            loss_kl_A = self.loss_kl_fn(mu_x, logvar_x)
+            loss_kl_B = self.loss_kl_fn(mu_y, logvar_y)
+            loss_kl = loss_kl_A + loss_kl_B
+            total_loss = loss_recon_A + loss_recon_B + self.lambda_kl * loss_kl
+
+            # Compute translations for visualization (A->B and B->A)
+            Gx_translated = self.translate_A_to_B(x)  # x -> target modality
+            Fy_translated = self.translate_B_to_A(y)  # y -> source modality
+
+            return {
+                'G_loss': total_loss.item(),
+                'total_loss': total_loss.item(),
+                'loss_recon_A': loss_recon_A.item(),
+                'loss_recon_B': loss_recon_B.item(),
+                'loss_kl': loss_kl.item(),
+                'loss_kl_A': loss_kl_A.item(),
+                'loss_kl_B': loss_kl_B.item(),
+                'Gx': Gx_translated,  # Translation A->B (looks like target)
+                'Fy': Fy_translated   # Translation B->A (looks like source)
+            }
+
 
 class VariationalAutoencoder (nn.Module):
     def __init__(self, latent_dim=64):
@@ -950,9 +1202,10 @@ class VAEGAN (nn.Module):
 
     def forward(self, x, y):
         Gx, mu, logvar = self.G(x)  # output of the VAE
+        Gy, mu_y, logvar_y = self.G(y)  # Identity mapping for target modality (for identity loss)
         DGx = self.D(Gx)  # Discriminator output for generated data
         Dy = self.D(y)  # Discriminator output for real data
-        return Gx, mu, logvar, DGx, Dy # All Netework expect Gx as their first output
+        return Gx, mu, logvar, Gy, mu_y, logvar_y, DGx, Dy # All Netework expect Gx as their first output
     
     def configure_optimizers(self, lr=2e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generator and Discriminator"""
@@ -992,6 +1245,7 @@ class VAEGAN (nn.Module):
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+        self.lambda_recon = kwargs.get('lambda_recon', 1.0)
 
     def enable_debug_mode(self, enabled=True):
         """Enable/disable debug mode for detailed TensorBoard logging"""
@@ -1012,14 +1266,14 @@ class VAEGAN (nn.Module):
         y = batch['y']
 
         # Forward pass
-        Gx, mu, logvar, DGx, Dy = self(x, y)
+        Gx, mu, logvar, Gy, mu_y, logvar_y, DGx, Dy = self(x, y)
 
         # Generator losses
         loss_trans = self.translation_loss(Gx, y)
         total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dy, DGx)
-        loss_id = self.identity_loss(x, y, Gx, y)
+        loss_id = self.identity_loss(x, y, x, Gy)
         loss_kl = self.kl_loss(mu, logvar)
-        G_loss = (loss_trans + self.lambda_gan * total_loss_gan +
+        G_loss = (self.lambda_recon * loss_trans + self.lambda_gan * total_loss_gan +
                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
 
         # Discriminator loss
@@ -1069,14 +1323,14 @@ class VAEGAN (nn.Module):
             y = batch['y']
             
             # Forward pass
-            Gx, mu, logvar, DGx, Dx = self(x, y)
+            Gx, mu, logvar, Gy, mu_y, logvar_y, DGx, Dx = self(x, y)
             
             # Compute losses
             loss_trans = self.translation_loss(Gx, y)
             total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dx, DGx)
-            loss_id = self.identity_loss(x, y, Gx, y)
+            loss_id = self.identity_loss(x, y, x, Gy)
             loss_kl = self.kl_loss(mu, logvar)
-            G_loss = (loss_trans + self.lambda_gan * total_loss_gan +
+            G_loss = (self.lambda_recon * loss_trans + self.lambda_gan * total_loss_gan +
                     self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
             total_loss_gan_disc, loss_gan_real_disc, loss_gan_fake_disc = self.gan_loss_disc(Dx, DGx)
             # Return metrics
@@ -1361,14 +1615,16 @@ class CycleAEGAN (nn.Module):
 
     def forward(self, x, y):
         Gx = self.G(x)
+        Gy = self.G(y)
         FGx = self.F(Gx)
         Fy = self.F(y)
+        Fx = self.F(x)
         GFy = self.G(Fy)
         DYGx = self.DY(Gx)
         DXFy = self.DX(Fy)
         DXx = self.DX(x)
         DYy = self.DY(y)
-        return Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy # All Netework expect Gx as their first output (added DXx, DYy for debug)
+        return Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy, Gy, Fx # All Netework expect Gx as their first output
     
     def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
         """Configure optimizers for Generators and Discriminators"""
@@ -1435,14 +1691,14 @@ class CycleAEGAN (nn.Module):
         self.optimizer_G.zero_grad()
 
         # Forward pass
-        Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
+        Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy, Gy, Fx = self(x, y)
 
         # Compute generator losses
         loss_cycle = self.loss_cycle(x, y, FGx, GFy)
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
-        loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
+        loss_identity = self.loss_identity(x, y, Fx, Gy)
 
         G_loss = (self.lambda_cycle * loss_cycle +
                   self.lambda_gan * loss_gan_g +
@@ -1519,14 +1775,14 @@ class CycleAEGAN (nn.Module):
             y = batch['y']
 
             # Forward pass
-            Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy = self(x, y)
+            Gx, FGx, Fy, GFy, DYGx, DXFy, DXx, DYy, Gy, Fx = self(x, y)
 
             # Compute generator losses
             loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_identity = self.loss_identity(x, y, FGx, GFy) + self.loss_identity(y, x, GFy, FGx)
+            loss_identity = self.loss_identity(x, y, Fx, Gy)
 
             G_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g +
@@ -1696,7 +1952,7 @@ class CycleVAEGAN (nn.Module):
                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
         G_loss = (self.lambda_cycle * loss_cycle +
-                  self.lambda_gan * loss_gan_g +
+                  self.lambda_gan * loss_gan_g_fake +
                   self.lambda_identity * loss_identity +
                   self.lambda_kl * loss_kl)
 
@@ -1743,7 +1999,7 @@ class CycleVAEGAN (nn.Module):
             'D_loss_y_real': D_loss_y_real.item(),
             'D_loss_y_fake': D_loss_y_fake.item(),
             'loss_cycle': loss_cycle.item(),
-            'loss_gan_g': loss_gan_g.item(),
+            'loss_gan_g': loss_gan_g_fake.item(),
             'loss_gan_g_x_real': loss_gan_g_x_real.item(),
             'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
             'loss_gan_g_y_real': loss_gan_g_y_real.item(),
@@ -1776,20 +2032,21 @@ class CycleVAEGAN (nn.Module):
             (Gx, FGx, Fy, GFy,
              mu_x, logvar_x, mu_FGx, logvar_FGx,
              mu_y, logvar_y, mu_GFy, logvar_GFy,
-             DYGx, DXFy, DXx, DYy) = self(x, y)
+             DYGx, DXFy, DXx, DYy, Gy, Fx) = self(x, y)
 
             # Compute generator losses
             loss_cycle = self.loss_cycle(x, y, FGx, GFy)
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
+            loss_gan_g_fake = loss_gan_g_x_fake + loss_gan_g_y_fake
+            loss_gan_g_real = loss_gan_g_x_real + loss_gan_g_y_real
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_identity = (self.loss_identity(x, y, FGx, GFy) +
-                             self.loss_identity(y, x, GFy, FGx))
+            loss_identity = self.loss_identity(x, y, Fx, Gy)
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
             G_loss = (self.lambda_cycle * loss_cycle +
-                      self.lambda_gan * loss_gan_g +
+                      self.lambda_gan * loss_gan_g_fake +
                       self.lambda_identity * loss_identity +
                       self.lambda_kl * loss_kl)
 
@@ -1808,7 +2065,7 @@ class CycleVAEGAN (nn.Module):
                 'D_loss_y_real': D_loss_y_real.item(),
                 'D_loss_y_fake': D_loss_y_fake.item(),
                 'loss_cycle': loss_cycle.item(),
-                'loss_gan_g': loss_gan_g.item(),
+                'loss_gan_g': loss_gan_g_fake.item(),
                 'loss_gan_g_x_real': loss_gan_g_x_real.item(),
                 'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
                 'loss_gan_g_y_real': loss_gan_g_y_real.item(),
