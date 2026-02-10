@@ -1348,10 +1348,11 @@ class VAEGAN (nn.Module):
 
 
 class CycleAE (nn.Module):
-    def __init__(self):
+    def __init__(self, paired=True):
         super(CycleAE, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
+        self.paired = paired  # Controls whether to use translation loss
         
         # loss related attributes to be set in "configure_loss"
         self.optimizer = None
@@ -1389,7 +1390,8 @@ class CycleAE (nn.Module):
     def configure_loss(self, **kwargs):
         """Configure loss functions (ignores unused kwargs)"""
         self.loss_cycle = CycleConsistencyLoss()
-        self.loss_trans = TranslationLoss()
+        if self.paired:
+            self.loss_trans = TranslationLoss()
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
 
     def training_step(self, batch):
@@ -1400,8 +1402,10 @@ class CycleAE (nn.Module):
         Returns:
             dict with loss metrics
         """
-        if self.loss_cycle is None or self.loss_trans is None:
+        if self.loss_cycle is None:
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_trans is None:
+            raise ValueError("Translation loss not configured for paired mode.")
         if self.optimizer is None:
             raise ValueError("Optimizer has not been configured yet.")
         x = batch['x']
@@ -1410,23 +1414,29 @@ class CycleAE (nn.Module):
         # Forward pass
         Gx, FGx, Fy, GFy = self(x, y)
 
-        # Compute losses (FIXED: correct argument order for loss_cycle)
+        # Compute losses
         loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
-        total_loss = self.lambda_cycle * loss_cycle + loss_trans
+        total_loss = self.lambda_cycle * loss_cycle
+        
+        metrics = {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'G_loss': total_loss.item()
+        }
+        
+        if self.paired:
+            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+            total_loss = total_loss + loss_trans
+            metrics['loss_trans'] = loss_trans.item()
+            metrics['total_loss'] = total_loss.item()
+            metrics['G_loss'] = total_loss.item()
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
 
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-            'loss_trans': loss_trans.item(),
-            'G_loss': total_loss.item()
-        }
+        return metrics
 
     def validation_step(self, batch):
         """
@@ -1436,8 +1446,10 @@ class CycleAE (nn.Module):
         Returns:
             dict with loss metrics and output
         """
-        if self.loss_cycle is None or self.loss_trans is None:
+        if self.loss_cycle is None:
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_trans is None:
+            raise ValueError("Translation loss not configured for paired mode.")
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
@@ -1445,28 +1457,34 @@ class CycleAE (nn.Module):
             # Forward pass
             Gx, FGx, Fy, GFy = self(x, y)
 
-            # Compute losses (FIXED: correct argument order for loss_cycle)
+            # Compute losses
             loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
-            # Use lambda_cycle for consistency with training
-            total_loss = self.lambda_cycle * loss_cycle + loss_trans
-
-            # Return metrics
-            return {
+            total_loss = self.lambda_cycle * loss_cycle
+            
+            metrics = {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
-                'loss_trans': loss_trans.item(),
                 'G_loss': total_loss.item(),
-                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
-                'Fy': Fy.detach()   # Fy = F(y) translation B->A
+                'Gx': Gx.detach(),
+                'Fy': Fy.detach()
             }
+            
+            if self.paired:
+                loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+                total_loss = total_loss + loss_trans
+                metrics['loss_trans'] = loss_trans.item()
+                metrics['total_loss'] = total_loss.item()
+                metrics['G_loss'] = total_loss.item()
+
+            return metrics
 
 
 class CycleVAE (nn.Module):
-    def __init__(self, latent_dim=64):
+    def __init__(self, latent_dim=64, paired=True):
         super(CycleVAE, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
+        self.paired = paired  # Controls whether to use translation loss
 
     def forward(self, x, y):
         Gx, mu_x, logvar_x = self.G(x)
@@ -1498,9 +1516,11 @@ class CycleVAE (nn.Module):
     def configure_loss(self, **kwargs):
         """Configure loss functions"""
         self.loss_cycle = CycleConsistencyLoss()
-        self.loss_trans = TranslationLoss()
+        if self.paired:
+            self.loss_trans = TranslationLoss()
         self.loss_kl = KLDivergenceLoss()
         self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
+        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
 
     def training_step(self, batch):
         """
@@ -1510,8 +1530,10 @@ class CycleVAE (nn.Module):
         Returns:
             dict with loss metrics
         """
-        if self.loss_cycle is None or self.loss_trans is None or self.loss_kl is None:
+        if self.loss_cycle is None or self.loss_kl is None:
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_trans is None:
+            raise ValueError("Translation loss not configured for paired mode.")
         if self.optimizer is None:
             raise ValueError("Optimizer has not been configured yet.")
 
@@ -1520,27 +1542,34 @@ class CycleVAE (nn.Module):
 
         # Forward pass
         Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
-        # Compute losses (FIXED: correct argument order for loss_cycle)
+        
+        # Compute losses
         loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                     self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
-        total_loss = loss_cycle + loss_trans + self.lambda_kl * loss_kl
+        total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
+        
+        metrics = {
+            'total_loss': total_loss.item(),
+            'loss_cycle': loss_cycle.item(),
+            'loss_kl': loss_kl.item(),
+            'G_loss': total_loss.item()
+        }
+        
+        if self.paired:
+            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+            total_loss = total_loss + loss_trans
+            metrics['loss_trans'] = loss_trans.item()
+            metrics['total_loss'] = total_loss.item()
+            metrics['G_loss'] = total_loss.item()
 
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
 
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-            'loss_trans': loss_trans.item(),
-            'loss_kl': loss_kl.item(),
-            'G_loss': total_loss.item()
-        }
+        return metrics
 
     def validation_step(self, batch):
         """
@@ -1550,8 +1579,10 @@ class CycleVAE (nn.Module):
         Returns:
             dict with loss metrics and output
         """
-        if self.loss_cycle is None or self.loss_trans is None or self.loss_kl is None:
+        if self.loss_cycle is None or self.loss_kl is None:
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_trans is None:
+            raise ValueError("Translation loss not configured for paired mode.")
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
@@ -1559,32 +1590,39 @@ class CycleVAE (nn.Module):
             # Forward pass
             Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
 
-            # Compute losses (FIXED: correct argument order for loss_cycle)
+            # Compute losses
             loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                         self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-            total_loss = loss_cycle + loss_trans + self.lambda_kl * loss_kl
-
-            # Return metrics
-            return {
+            total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
+            
+            metrics = {
                 'total_loss': total_loss.item(),
                 'loss_cycle': loss_cycle.item(),
-                'loss_trans': loss_trans.item(),
                 'loss_kl': loss_kl.item(),
                 'G_loss': total_loss.item(),
-                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
-                'Fy': Fy.detach()   # Fy = F(y) translation B->A
+                'Gx': Gx.detach(),
+                'Fy': Fy.detach()
             }
+            
+            if self.paired:
+                loss_trans = self.loss_trans(Gx, y) + self.loss_trans(Fy, x)
+                total_loss = total_loss + loss_trans
+                metrics['loss_trans'] = loss_trans.item()
+                metrics['total_loss'] = total_loss.item()
+                metrics['G_loss'] = total_loss.item()
+
+            return metrics
 
 
 class CycleAEGAN (nn.Module):
-    def __init__(self):
+    def __init__(self, paired=True):
         super(CycleAEGAN, self).__init__()
         self.F = Autoencoder()
         self.G = Autoencoder()
         self.DX = Discriminator()
         self.DY = Discriminator()
+        self.paired = paired  # Controls whether to use identity loss
 
         # Apply weight initialization
         self.apply(self._init_weights)
@@ -1665,7 +1703,8 @@ class CycleAEGAN (nn.Module):
         self.loss_cycle = CycleConsistencyLoss()
         self.loss_gan_gen = GANLossGenerator()
         self.loss_gan_disc = GANLossDiscriminator()
-        self.loss_identity = IdentityLoss()
+        if self.paired:
+            self.loss_identity = IdentityLoss()
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
         self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
@@ -1679,8 +1718,10 @@ class CycleAEGAN (nn.Module):
             dict with loss metrics
         """
         if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_gan_disc is None or self.loss_identity is None):
+            self.loss_gan_disc is None):
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_identity is None:
+            raise ValueError("Identity loss not configured for paired mode.")
         if self.optimizer_G is None or self.optimizer_D is None:
             raise ValueError("Optimizers have not been configured yet.")
 
@@ -1698,11 +1739,13 @@ class CycleAEGAN (nn.Module):
         loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
         loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
         loss_gan_g = loss_gan_g_x + loss_gan_g_y
-        loss_identity = self.loss_identity(x, y, Fx, Gy)
 
         G_loss = (self.lambda_cycle * loss_cycle +
-                  self.lambda_gan * loss_gan_g +
-                  self.lambda_identity * loss_identity)
+                  self.lambda_gan * loss_gan_g)
+        
+        if self.paired:
+            loss_identity = self.loss_identity(x, y, Fx, Gy)
+            G_loss = G_loss + self.lambda_identity * loss_identity
 
         G_loss.backward()
 
@@ -1738,7 +1781,7 @@ class CycleAEGAN (nn.Module):
             d_y_fake_mean = DYGx_detached.mean().item()
 
         # Return metrics
-        return {
+        metrics = {
             'total_loss': (G_loss.item() + D_loss.item()),
             'G_loss': G_loss.item(),
             'D_loss': D_loss.item(),
@@ -1752,12 +1795,16 @@ class CycleAEGAN (nn.Module):
             'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
             'loss_gan_g_y_real': loss_gan_g_y_real.item(),
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-            'loss_identity': loss_identity.item(),
             'd_x_real_mean': d_x_real_mean,
             'd_x_fake_mean': d_x_fake_mean,
             'd_y_real_mean': d_y_real_mean,
             'd_y_fake_mean': d_y_fake_mean
         }
+        
+        if self.paired:
+            metrics['loss_identity'] = loss_identity.item()
+        
+        return metrics
 
     def validation_step(self, batch):
         """
@@ -1768,8 +1815,10 @@ class CycleAEGAN (nn.Module):
             dict with loss metrics and output
         """
         if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_gan_disc is None or self.loss_identity is None):
+            self.loss_gan_disc is None):
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_identity is None:
+            raise ValueError("Identity loss not configured for paired mode.")
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
@@ -1782,11 +1831,13 @@ class CycleAEGAN (nn.Module):
             loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
             loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_identity = self.loss_identity(x, y, Fx, Gy)
 
             G_loss = (self.lambda_cycle * loss_cycle +
-                      self.lambda_gan * loss_gan_g +
-                      self.lambda_identity * loss_identity)
+                      self.lambda_gan * loss_gan_g)
+            
+            if self.paired:
+                loss_identity = self.loss_identity(x, y, Fx, Gy)
+                G_loss = G_loss + self.lambda_identity * loss_identity
 
             # Compute discriminator losses
             loss_gan_d_x, D_loss_x_real, D_loss_x_fake = self.loss_gan_disc(DXx, DXFy)
@@ -1794,7 +1845,7 @@ class CycleAEGAN (nn.Module):
             D_loss = loss_gan_d_x + loss_gan_d_y
 
             # Return metrics
-            return {
+            metrics = {
                 'total_loss': (G_loss.item() + D_loss.item()),
                 'G_loss': G_loss.item(),
                 'D_loss': D_loss.item(),
@@ -1808,20 +1859,25 @@ class CycleAEGAN (nn.Module):
                 'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
                 'loss_gan_g_y_real': loss_gan_g_y_real.item(),
                 'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-                'loss_identity': loss_identity.item(),
-                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
-                'Fy': Fy.detach()   # Fy = F(y) translation B->A
+                'Gx': Gx.detach(),
+                'Fy': Fy.detach()
             }
+            
+            if self.paired:
+                metrics['loss_identity'] = loss_identity.item()
+            
+            return metrics
 
 
 class CycleVAEGAN (nn.Module):
 
-    def __init__(self, latent_dim=64):
+    def __init__(self, latent_dim=64, paired=True):
         super(CycleVAEGAN, self).__init__()
         self.F = VariationalAutoencoder(latent_dim)
         self.G = VariationalAutoencoder(latent_dim)
         self.DX = Discriminator()
         self.DY = Discriminator()
+        self.paired = paired  # Controls whether to use identity loss
 
         # Apply weight initialization
         self.apply(self._init_weights)
@@ -1906,7 +1962,8 @@ class CycleVAEGAN (nn.Module):
         self.loss_cycle = CycleConsistencyLoss()
         self.loss_gan_gen = GANLossGenerator()
         self.loss_gan_disc = GANLossDiscriminator()
-        self.loss_identity = IdentityLoss()
+        if self.paired:
+            self.loss_identity = IdentityLoss()
         self.loss_kl = KLDivergenceLoss()
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
@@ -1922,9 +1979,11 @@ class CycleVAEGAN (nn.Module):
             dict with loss metrics
         """
         if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_gan_disc is None or self.loss_identity is None or
+            self.loss_gan_disc is None or
             self.loss_kl is None):
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_identity is None:
+            raise ValueError("Identity loss not configured for paired mode.")
         if self.optimizer_G is None or self.optimizer_D is None:
             raise ValueError("Optimizers have not been configured yet.")
 
@@ -1947,14 +2006,16 @@ class CycleVAEGAN (nn.Module):
         loss_gan_g_fake = loss_gan_g_x_fake + loss_gan_g_y_fake
         loss_gan_g_real = loss_gan_g_x_real + loss_gan_g_y_real
         loss_gan_g = loss_gan_g_fake + loss_gan_g_real
-        loss_identity = (self.loss_identity(x, y, Fx, Gy))
         loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
         G_loss = (self.lambda_cycle * loss_cycle +
                   self.lambda_gan * loss_gan_g_fake +
-                  self.lambda_identity * loss_identity +
                   self.lambda_kl * loss_kl)
+        
+        if self.paired:
+            loss_identity = (self.loss_identity(x, y, Fx, Gy))
+            G_loss = G_loss + self.lambda_identity * loss_identity
 
         G_loss.backward()
 
@@ -1990,7 +2051,7 @@ class CycleVAEGAN (nn.Module):
             d_y_fake_mean = DYGx_detached.mean().item()
 
         # Return metrics
-        return {
+        metrics = {
             'total_loss': (G_loss.item() + D_loss.item()),
             'G_loss': G_loss.item(),
             'D_loss': D_loss.item(),
@@ -2004,13 +2065,17 @@ class CycleVAEGAN (nn.Module):
             'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
             'loss_gan_g_y_real': loss_gan_g_y_real.item(),
             'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-            'loss_identity': loss_identity.item(),
             'loss_kl': loss_kl.item(),
             'd_x_real_mean': d_x_real_mean,
             'd_x_fake_mean': d_x_fake_mean,
             'd_y_real_mean': d_y_real_mean,
             'd_y_fake_mean': d_y_fake_mean
         }
+        
+        if self.paired:
+            metrics['loss_identity'] = loss_identity.item()
+        
+        return metrics
 
     def validation_step(self, batch):
         """
@@ -2021,9 +2086,11 @@ class CycleVAEGAN (nn.Module):
             dict with loss metrics and output
         """
         if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_gan_disc is None or self.loss_identity is None or
+            self.loss_gan_disc is None or
             self.loss_kl is None):
             raise ValueError("Loss functions have not been configured yet.")
+        if self.paired and self.loss_identity is None:
+            raise ValueError("Identity loss not configured for paired mode.")
         with torch.no_grad():
             x = batch['x']
             y = batch['y']
@@ -2041,14 +2108,16 @@ class CycleVAEGAN (nn.Module):
             loss_gan_g_fake = loss_gan_g_x_fake + loss_gan_g_y_fake
             loss_gan_g_real = loss_gan_g_x_real + loss_gan_g_y_real
             loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_identity = self.loss_identity(x, y, Fx, Gy)
             loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
 
             G_loss = (self.lambda_cycle * loss_cycle +
                       self.lambda_gan * loss_gan_g_fake +
-                      self.lambda_identity * loss_identity +
                       self.lambda_kl * loss_kl)
+            
+            if self.paired:
+                loss_identity = self.loss_identity(x, y, Fx, Gy)
+                G_loss = G_loss + self.lambda_identity * loss_identity
 
             # Compute discriminator losses
             loss_gan_d_x, D_loss_x_real, D_loss_x_fake = self.loss_gan_disc(DXx, DXFy)
@@ -2056,7 +2125,7 @@ class CycleVAEGAN (nn.Module):
             D_loss = loss_gan_d_x + loss_gan_d_y
 
             # Return metrics
-            return {
+            metrics = {
                 'total_loss': (G_loss.item() + D_loss.item()),
                 'G_loss': G_loss.item(),
                 'D_loss': D_loss.item(),
@@ -2070,495 +2139,16 @@ class CycleVAEGAN (nn.Module):
                 'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
                 'loss_gan_g_y_real': loss_gan_g_y_real.item(),
                 'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-                'loss_identity': loss_identity.item(),
                 'loss_kl': loss_kl.item(),
-                'Gx': Gx.detach(),  # Gx = G(x) translation A->B
-                'Fy': Fy.detach()   # Fy = F(y) translation B->A
+                'Gx': Gx.detach(),
+                'Fy': Fy.detach()
             }
-
-
-### Unpaired Datasets Networks ###
-
-class CycleAE_unpaired(nn.Module):
-    def __init__(self):
-        super(CycleAE_unpaired, self).__init__()
-        self.F = Autoencoder()
-        self.G = Autoencoder()
-
-    def forward(self, x, y):
-        Gx = self.G(x)
-        FGx = self.F(Gx)
-        Fy = self.F(y)
-        GFy = self.G(Fy)
-        return Gx, FGx, Fy, GFy # All Netework expect Gx as their first output
-
-    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
-        """Configure optimizer for training"""
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
-        return self.optimizer
-    
-    def save_optimizer_states(self):
-        """Save optimizer states for checkpointing"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        return {'optimizer': self.optimizer.state_dict()}
-    
-    def load_optimizer_states(self, states):
-        """Load optimizer states from checkpoint"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        if 'optimizer' in states:
-            self.optimizer.load_state_dict(states['optimizer'])
-        else :
-            raise KeyError("optimizer state not found in states")
-    
-    def configure_loss(self, **kwargs):
-        """Configure loss functions (ignores unused kwargs)"""
-        self.loss_cycle = CycleConsistencyLoss()
-        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-
-    def training_step(self, batch):
-        """
-        Training step for CycleAE unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics
-        """
-        if self.loss_cycle is None:
-            raise ValueError("Loss functions have not been configured yet.")
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        x = batch['x']
-        y = batch['y']
-
-        # Forward pass
-        Gx, FGx, Fy, GFy = self(x, y)
-
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        total_loss = self.lambda_cycle * loss_cycle
-
-        # Backward pass
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
-
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-        }
-
-    def validation_step(self, batch):
-        """
-        Validation step for CycleAE unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics and output
-        """
-        if self.loss_cycle is None:
-            raise ValueError("Loss functions have not been configured yet.")
-        with torch.no_grad():
-            x = batch['x']
-            y = batch['y']
-
-            # Forward pass
-            Gx, FGx, Fy, GFy = self(x, y)
-
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            total_loss = self.lambda_cycle * loss_cycle
-
-            # Return metrics
-            return {
-                'total_loss': total_loss.item(),
-                'loss_cycle': loss_cycle.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
-            }
-    
-class CycleVAE_unpaired (nn.Module):
-    def __init__(self, latent_dim=64):
-        super(CycleVAE_unpaired, self).__init__()
-        self.F = VariationalAutoencoder(latent_dim)
-        self.G = VariationalAutoencoder(latent_dim)
-
-    def forward(self, x, y):
-        Gx, mu_x, logvar_x = self.G(x)
-        FGx, mu_FGx, logvar_FGx = self.F(Gx)
-        Fy, mu_y, logvar_y = self.F(y)
-        GFy, mu_GFy, logvar_GFy = self.G(Fy)
-        return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy # All Netework expect Gx as their first output
-    
-    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
-        """Configure optimizer for training"""
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
-        return self.optimizer
-    
-    def save_optimizer_states(self):
-        """Save optimizer states for checkpointing"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        return {'optimizer': self.optimizer.state_dict()}
-    
-    def load_optimizer_states(self, states):
-        """Load optimizer states from checkpoint"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        if 'optimizer' in states:
-            self.optimizer.load_state_dict(states['optimizer'])
-        else :
-            raise KeyError("optimizer state not found in states")
-    
-    def configure_loss(self, **kwargs):
-        """Configure loss functions"""
-        self.loss_cycle = CycleConsistencyLoss()
-        self.loss_kl = KLDivergenceLoss()
-        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-
-    def training_step(self, batch):
-        """
-        Training step for CycleVAE unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics
-        """
-        if self.loss_cycle is None or self.loss_kl is None:
-            raise ValueError("Loss functions have not been configured yet.")
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        
-        x = batch['x']
-        y = batch['y']
-
-        # Forward pass
-        Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
-                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-
-        total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
-
-        # Backward pass
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
-
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-            'loss_kl': loss_kl.item(),
-        }
-
-    def validation_step(self, batch):
-        """
-        Validation step for CycleVAE unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics and output
-        """
-        if self.loss_cycle is None or self.loss_kl is None:
-            raise ValueError("Loss functions have not been configured yet.")
-        with torch.no_grad():
-            x = batch['x']
-            y = batch['y']
-
-            # Forward pass
-            Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy = self(x, y)
-
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
-                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-            total_loss = self.lambda_cycle * loss_cycle + self.lambda_kl * loss_kl
-
-            # Return metrics
-            return {
-                'total_loss': total_loss.item(),
-                'loss_cycle': loss_cycle.item(),
-                'loss_kl': loss_kl.item(),
-                'output' : Gx.detach()  # For compatibility, return Gx as output ???????
-            }
-
-
-class CycleAEGAN_unpaired (nn.Module):
-    def __init__(self):
-        super(CycleAEGAN_unpaired, self).__init__()
-        self.F = Autoencoder()
-        self.G = Autoencoder()
-        self.DX = Discriminator()
-        self.DY = Discriminator()
-
-    def forward(self, x, y):
-        Gx = self.G(x)
-        FGx = self.F(Gx)
-        Fy = self.F(y)
-        GFy = self.G(Fy)
-        DYGx = self.DY(Gx)
-        DXFy = self.DX(Fy)
-        DXx = self.DX(x)
-        DYy = self.DY(y)
-        return Gx, FGx, Fy, GFy, DYGx, DXFy # All Netework expect Gx as their first output
-    
-    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
-        """Configure optimizer for training"""
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
-        return self.optimizer
-    
-    def save_optimizer_states(self):
-        """Save optimizer states for checkpointing"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        return {'optimizer': self.optimizer.state_dict()}
-    
-    def load_optimizer_states(self, states):
-        """Load optimizer states from checkpoint"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        if 'optimizer' in states:
-            self.optimizer.load_state_dict(states['optimizer'])
-        else :
-            raise KeyError("optimizer state not found in states")
-    
-    def configure_loss(self, **kwargs):
-        """Configure loss functions (ignores unused kwargs)"""
-        self.loss_cycle = CycleConsistencyLoss()
-        self.loss_gan_gen = GANLossGenerator()
-        self.lambda_gan = kwargs.get('lambda_gan', 1.0)
-        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-
-    def training_step(self, batch):
-        """
-        Training step for CycleAEGAN unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics
-        """
-        if (self.loss_cycle is None or self.loss_gan_gen is None):
-            raise ValueError("Loss functions have not been configured yet.")
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        
-        x = batch['x']
-        y = batch['y']
-
-        # Forward pass
-        Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
-
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
-        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
-        loss_gan_g = loss_gan_g_x + loss_gan_g_y
-
-        total_loss = (self.lambda_cycle * loss_cycle +
-                      self.lambda_gan * loss_gan_g)
-        
-         # Backward pass
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
-
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-            'loss_gan_g': loss_gan_g.item(),
-            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
-            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
-            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
-            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-        }
-
-    def validation_step(self, batch):
-        """
-        Validation step for CycleAEGAN unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics and output
-        """
-        if (self.loss_cycle is None or self.loss_gan_gen is None):
-            raise ValueError("Loss functions have not been configured yet.")
-        with torch.no_grad():
-            x = batch['x']
-            y = batch['y']
-
-            # Forward pass
-            Gx, FGx, Fy, GFy, DYGx, DXFy = self(x, y)
-
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(self.DX(x), DXFy)
-            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(self.DY(y), DYGx)
-            loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            total_loss = (self.lambda_cycle * loss_cycle +
-                          self.lambda_gan * loss_gan_g)
-
-            # Return metrics
-            return {
-                'total_loss': total_loss.item(),
-                'loss_cycle': loss_cycle.item(),
-                'loss_gan_g': loss_gan_g.item(),
-                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
-                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
-                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
-                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-                'output' : Gx.detach()
-            }
-
-
-class CycleVAEGAN_unpaired (nn.Module):
-    def __init__(self, latent_dim=64):
-        super(CycleVAEGAN_unpaired, self).__init__()
-        self.F = VariationalAutoencoder(latent_dim)
-        self.G = VariationalAutoencoder(latent_dim)
-        self.DX = Discriminator()
-        self.DY = Discriminator()
-
-    def forward(self, x, y):
-        Gx, mu_x, logvar_x = self.G(x)
-        FGx, mu_FGx, logvar_FGx = self.F(Gx)
-        Fy, mu_y, logvar_y = self.F(y)
-        GFy, mu_GFy, logvar_GFy = self.G(Fy)
-        DYGx = self.DY(Gx)
-        DXFy = self.DX(Fy)
-        DXx = self.DX(x)
-        DYy = self.DY(y)
-        return Gx, FGx, Fy, GFy, mu_x, logvar_x, mu_FGx, logvar_FGx, mu_y, logvar_y, mu_GFy, logvar_GFy, DYGx, DXFy, DXx, DYy # All Netework expect Gx as their first output
-
-    def configure_optimizers(self, lr=1e-4, betas=(0.5, 0.999)):
-        """Configure optimizer for training"""
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr, betas=betas)
-        return self.optimizer
-
-    def save_optimizer_states(self):
-        """Save optimizer states for checkpointing"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        return {'optimizer': self.optimizer.state_dict()}
-
-    def load_optimizer_states(self, states):
-        """Load optimizer states from checkpoint"""
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        if 'optimizer' in states:
-            self.optimizer.load_state_dict(states['optimizer'])
-        else :
-            raise KeyError("optimizer state not found in states")
-    
-    def configure_loss(self, **kwargs):
-        """Configure loss functions"""
-        self.loss_cycle = CycleConsistencyLoss()
-        self.loss_gan_gen = GANLossGenerator()
-        self.loss_kl = KLDivergenceLoss()
-        self.lambda_gan = kwargs.get('lambda_gan', 1.0)
-        self.lambda_cycle = kwargs.get('lambda_cycle', 10.0)
-        self.lambda_kl = kwargs.get('lambda_kl', 1e-5)
-
-    def training_step(self, batch):
-        """
-        Training step for CycleVAEGAN unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics
-        """
-        if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_kl is None):
-            raise ValueError("Loss functions have not been configured yet.")
-        if self.optimizer is None:
-            raise ValueError("Optimizer has not been configured yet.")
-        
-        x = batch['x']
-        y = batch['y']
-
-        # Forward pass
-        (Gx, FGx, Fy, GFy,
-         mu_x, logvar_x, mu_FGx, logvar_FGx,
-         mu_y, logvar_y, mu_GFy, logvar_GFy,
-         DYGx, DXFy, DXx, DYy) = self(x, y)
-
-        # Compute losses
-        loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-        loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
-        loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
-        loss_gan_g = loss_gan_g_x + loss_gan_g_y
-        loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
-                    self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-
-        total_loss = (self.lambda_cycle * loss_cycle +
-                      self.lambda_gan * loss_gan_g +
-                      self.lambda_kl * loss_kl)
-
-        # Backward pass
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        self.optimizer.step()
-
-        # Return metrics
-        return {
-            'total_loss': total_loss.item(),
-            'loss_cycle': loss_cycle.item(),
-            'loss_gan_g': loss_gan_g.item(),
-            'loss_gan_g_x_real': loss_gan_g_x_real.item(),
-            'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
-            'loss_gan_g_y_real': loss_gan_g_y_real.item(),
-            'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-            'loss_kl': loss_kl.item(),
-        }
-
-    def validation_step(self, batch):
-        """
-        Validation step for CycleVAEGAN unpaired
-        Args:
-            batch: dict with 'x' (input) and 'y' (target)
-        Returns:
-            dict with loss metrics and output
-        """
-        if (self.loss_cycle is None or self.loss_gan_gen is None or
-            self.loss_kl is None):
-            raise ValueError("Loss functions have not been configured yet.")
-        with torch.no_grad():
-            x = batch['x']
-            y = batch['y']
-
-            # Forward pass
-            (Gx, FGx, Fy, GFy,
-             mu_x, logvar_x, mu_FGx, logvar_FGx,
-             mu_y, logvar_y, mu_GFy, logvar_GFy,
-             DYGx, DXFy, DXx, DYy) = self(x, y)
             
-            # Compute losses
-            loss_cycle = self.loss_cycle(x, y, FGx, GFy)
-            loss_gan_g_x, loss_gan_g_x_real, loss_gan_g_x_fake = self.loss_gan_gen(DXx, DXFy)
-            loss_gan_g_y, loss_gan_g_y_real, loss_gan_g_y_fake = self.loss_gan_gen(DYy, DYGx)
-            loss_gan_g = loss_gan_g_x + loss_gan_g_y
-            loss_kl = (self.loss_kl(mu_x, logvar_x) + self.loss_kl(mu_FGx, logvar_FGx) +
-                        self.loss_kl(mu_y, logvar_y) + self.loss_kl(mu_GFy, logvar_GFy))
-            total_loss = (self.lambda_cycle * loss_cycle +
-                          self.lambda_gan * loss_gan_g +
-                          self.lambda_kl * loss_kl)
+            if self.paired:
+                metrics['loss_identity'] = loss_identity.item()
+            
+            return metrics
 
-            # Return metrics
-            return {
-                'total_loss': total_loss.item(),
-                'loss_cycle': loss_cycle.item(),
-                'loss_gan_g': loss_gan_g.item(),
-                'loss_gan_g_x_real': loss_gan_g_x_real.item(),
-                'loss_gan_g_x_fake': loss_gan_g_x_fake.item(),
-                'loss_gan_g_y_real': loss_gan_g_y_real.item(),
-                'loss_gan_g_y_fake': loss_gan_g_y_fake.item(),
-                'loss_kl': loss_kl.item(),
-                'output' : Gx.detach()
-            }
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

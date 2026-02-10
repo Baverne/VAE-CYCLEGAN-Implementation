@@ -228,6 +228,44 @@ class HypersimDataset(Dataset):
             paired_result['frame_id'] = result['frame_id']
             
             return paired_result
+        else:
+            # Unpaired mode: shuffle y by picking a random sample
+            unpaired_result = {}
+            if len(self.modalities) == 2:
+                # x from current index
+                unpaired_result['x'] = result[self.modalities[0]]
+                
+                # y from random index (unpaired)
+                random_idx = random.randint(0, len(self.samples) - 1)
+                random_sample = self.samples[random_idx]
+                random_y_path = random_sample['modality_paths'][self.modalities[1]]
+                random_y_img = Image.open(random_y_path).convert('RGB')
+                
+                # Apply transforms to random y
+                if self.transform is not None:
+                    if self.modalities[1] == 'color' and self.color_transform is not None:
+                        random_y_img = self.color_transform(random_y_img)
+                    random_y_img = self.transform(random_y_img)
+                    if not isinstance(random_y_img, torch.Tensor):
+                        random_y_img = transforms.ToTensor()(random_y_img)
+                else:
+                    if self.modalities[1] == 'color' and self.color_transform is not None:
+                        random_y_img = self.color_transform(random_y_img)
+                    if not isinstance(random_y_img, torch.Tensor):
+                        random_y_img = transforms.ToTensor()(random_y_img)
+                
+                unpaired_result['y'] = random_y_img
+                
+                # Keep scene info from x
+                if self.return_scene_info:
+                    unpaired_result['scene_num'] = result['scene_num']
+                    unpaired_result['scene_type'] = result['scene_type']
+                    unpaired_result['cam_num'] = result['cam_num']
+                unpaired_result['frame_id'] = result['frame_id']
+                
+                return unpaired_result
+            else:
+                raise ValueError("Unpaired mode requires exactly 2 modalities")
         
         return result
     
@@ -341,64 +379,6 @@ class SatelliteMapDataset(Dataset):
         return {'x': satellite, 'y': map_img}
 
 
-class UnpairedImageDataset(Dataset):
-    def __init__(
-        self,
-        root_dir,
-        split="train",
-        transform=None,
-        return_paths=False
-    ):
-        """
-        root_dir/
-            trainA/
-            trainB/
-            testA/
-            testB/
-        """
-        self.dir_A = os.path.join(root_dir, f"{split}A")
-        self.dir_B = os.path.join(root_dir, f"{split}B")
-
-        self.images_A = sorted(os.listdir(self.dir_A))
-        self.images_B = sorted(os.listdir(self.dir_B))
-
-        self.transform = transform
-        self.return_paths = return_paths
-
-    def __len__(self):
-        # Important: length is max, not min
-        return max(len(self.images_A), len(self.images_B))
-
-    def __getitem__(self, idx):
-        # deterministic for A
-        img_A_path = os.path.join(
-            self.dir_A, self.images_A[idx % len(self.images_A)]
-        )
-
-        # random for B (true unpaired sampling)
-        img_B_path = os.path.join(
-            self.dir_B, random.choice(self.images_B)
-        )
-
-        img_A = Image.open(img_A_path).convert("RGB")
-        img_B = Image.open(img_B_path).convert("RGB")
-
-        if self.transform:
-            img_A = self.transform(img_A)
-            img_B = self.transform(img_B)
-
-        sample = {
-            "x": img_A,
-            "y": img_B
-        }
-
-        if self.return_paths:
-            sample["x_path"] = img_A_path
-            sample["y_path"] = img_B_path
-
-        return sample
-
-
 if __name__ == "__main__":
     import torchvision.utils as vutils
 
@@ -422,7 +402,7 @@ if __name__ == "__main__":
 
     # Create dataset in paired mode (x=depth, y=normal)
     dataset = HypersimDataset(
-        root_dir='datasets/paired',
+        root_dir='datasets',
         modalities=['depth', 'normal'],
         transform=general_transform,
         color_transform=color_transform,

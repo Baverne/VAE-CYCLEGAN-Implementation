@@ -30,10 +30,10 @@ from tqdm import tqdm
 
 # Import networks, losses, and data manager
 from Networks import *
-from Data_Manager import HypersimDataset, UnpairedImageDataset, SatelliteMapDataset
+from Data_Manager import HypersimDataset, SatelliteMapDataset
 
 
-def create_model(architecture):
+def create_model(architecture, paired=True):
     """Create model based on architecture choice"""
     if architecture == 'autoencoder':
         model = Autoencoder()
@@ -54,17 +54,17 @@ def create_model(architecture):
         model = VAEGAN()
         print(f"Created VAE-GAN")
     elif architecture == 'cycleae':
-        model = CycleAE()
-        print(f"Created Cycle Autoencoder")
+        model = CycleAE(paired=paired)
+        print(f"Created Cycle Autoencoder ({'paired' if paired else 'unpaired'} mode)")
     elif architecture == 'cyclevae':
-        model = CycleVAE()
-        print(f"Created Cycle Variational Autoencoder")
+        model = CycleVAE(paired=paired)
+        print(f"Created Cycle Variational Autoencoder ({'paired' if paired else 'unpaired'} mode)")
     elif architecture == 'cycleaegan':
-        model = CycleAEGAN()
-        print(f"Created Cycle Autoencoder GAN")
+        model = CycleAEGAN(paired=paired)
+        print(f"Created Cycle Autoencoder GAN ({'paired' if paired else 'unpaired'} mode)")
     elif architecture == 'cyclevaegan':
-        model = CycleVAEGAN()
-        print(f"Created Cycle VAE-GAN")
+        model = CycleVAEGAN(paired=paired)
+        print(f"Created Cycle VAE-GAN ({'paired' if paired else 'unpaired'} mode)")
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
     return model
@@ -477,11 +477,12 @@ def create_dataloaders_paired(args):
     
     # Create dataset with transforms
     train_dataset = HypersimDataset(
-        root_dir=args.data_dir + '/paired',
+        root_dir=args.data_dir,
         modalities=[args.source_modality, args.target_modality],
         transform=general_transform,
         color_transform=color_transform, 
-        return_scene_info=True
+        return_scene_info=True,
+        paired_mode=args.paired  # Use paired or unpaired mode based on args
     )
     
     # Split dataset into train/test if needed
@@ -515,52 +516,6 @@ def create_dataloaders_paired(args):
             pin_memory=True
         )
     
-    return train_loader, test_loader
-
-
-def create_dataloaders_unpaired(args):
-    """
-    Create train and test dataloaders for unpaired dataset using summer2winter dataset.
-    Returns:
-        train_loader: DataLoader for training
-        test_loader: DataLoader for testing (or None if test_split=0)
-    """
-    unpaired_transform = transforms.Compose([
-        transforms.Resize(args.image_size),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-    ])
-    train_dataset = UnpairedImageDataset(
-        root_dir=args.data_dir + "/unpaired",
-        split="train",
-        transform=unpaired_transform
-    )
-
-    test_dataset = UnpairedImageDataset(
-        root_dir=args.data_dir + "/unpaired",
-        split="test",
-        transform=unpaired_transform
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True
-    )
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=True
-    )
-
-    print(f"Training samples: {len(train_dataset)}")
-    print(f"Testing samples: {len(test_dataset)}")
-
     return train_loader, test_loader
 
 
@@ -703,17 +658,18 @@ def main(args):
 
     # Create dataloaders
     if args.dataset == 'unpaired':
-        train_loader, test_loader = create_dataloaders_unpaired(args)
-        print("Using unpaired dataset (summer2winter)")
+        # Use the same dataset structure as paired, just with unpaired sampling
+        train_loader, test_loader = create_dataloaders_paired(args)
+        print(f"Using Hypersim dataset in {'paired' if args.paired else 'unpaired'} mode")
     elif args.dataset == 'maps':
         train_loader, test_loader = create_dataloaders_maps(args)
         print("Using maps dataset (satellite-to-map)")
     else:
         train_loader, test_loader = create_dataloaders_paired(args)
-        print("Using paired dataset (hypersim)")
+        print(f"Using Hypersim dataset in {'paired' if args.paired else 'unpaired'} mode")
     
     # Create model
-    model = create_model(args.architecture).to(device)
+    model = create_model(args.architecture, paired=args.paired).to(device)
 
     # Validate pretrained args mutual exclusivity
     if args.pretrained_doubleae is not None and args.pretrained_doublevae is not None:
@@ -869,6 +825,10 @@ if __name__ == '__main__':
                                  'vaegan', 'cycleae', 'cyclevae',
                                  'cycleaegan', 'cyclevaegan'],
                         help='Network architecture to train')
+    parser.add_argument('--paired', action='store_true', default=False,
+                        help='Use paired training mode (with translation/identity loss). Default is unpaired (cycle loss only).')
+    parser.add_argument('--unpaired', dest='paired', action='store_false',
+                        help='Use unpaired training mode (cycle loss only). This is the default.')
     
     # Transfer Learning & Pretraining parameters
     parser.add_argument('--freeze_encoder', action='store_true',

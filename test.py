@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 # Import networks and data manager
 from Networks import *
-from Data_Manager import HypersimDataset, UnpairedImageDataset, SatelliteMapDataset
+from Data_Manager import HypersimDataset, SatelliteMapDataset
 
 
 def discover_runs(runs_dir='runs'):
@@ -171,7 +171,7 @@ def create_test_dataloader_paired(args, num_samples=None):
     test_transform = create_test_transform_paired(args.get('image_size', 256))
 
     dataset = HypersimDataset(
-        root_dir=args['data_dir'] + '/paired',
+        root_dir=args['data_dir'],
         modalities=[args['source_modality'], args['target_modality']],
         transform=test_transform,
         color_transform=None,
@@ -189,32 +189,6 @@ def create_test_dataloader_paired(args, num_samples=None):
         )
     else:
         test_dataset = dataset
-
-    # Optionally limit samples
-    if num_samples is not None and num_samples < len(test_dataset):
-        indices = list(range(num_samples))
-        test_dataset = torch.utils.data.Subset(test_dataset, indices)
-
-    return DataLoader(
-        test_dataset,
-        batch_size=1,
-        shuffle=False,
-        num_workers=args.get('num_workers', 4),
-        pin_memory=True
-    )
-
-
-def create_test_dataloader_unpaired(args, num_samples=None):
-    """
-    Create test dataloader for unpaired dataset.
-    """
-    test_transform = create_test_transform_unpaired(args.get('image_size', 256))
-
-    test_dataset = UnpairedImageDataset(
-        root_dir=args['data_dir'] + "/unpaired",
-        split="test",
-        transform=test_transform
-    )
 
     # Optionally limit samples
     if num_samples is not None and num_samples < len(test_dataset):
