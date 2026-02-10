@@ -70,7 +70,7 @@ def discover_runs(runs_dir='runs'):
     return runs
 
 
-def create_model(architecture):
+def create_model(architecture, paired=True):
     """Create model based on architecture choice - same as train.py"""
     if architecture == 'autoencoder':
         model = Autoencoder()
@@ -85,16 +85,16 @@ def create_model(architecture):
         model = VAEGAN()
         print(f"Created VAE-GAN")
     elif architecture == 'cycleae':
-        model = CycleAE()
+        model = CycleAE(paired=paired)
         print(f"Created Cycle Autoencoder")
     elif architecture == 'cyclevae':
-        model = CycleVAE()
+        model = CycleVAE(paired=paired)
         print(f"Created Cycle Variational Autoencoder")
     elif architecture == 'cycleaegan':
-        model = CycleAEGAN()
+        model = CycleAEGAN(paired=paired)
         print(f"Created Cycle Autoencoder GAN")
     elif architecture == 'cyclevaegan':
-        model = CycleVAEGAN()
+        model = CycleVAEGAN(paired=paired)
         print(f"Created Cycle VAE-GAN")
     elif architecture == 'doubleae':
         model = DoubleAutoencoder()
@@ -119,9 +119,16 @@ def load_model_for_inference(architecture, checkpoint_path, device):
     Returns:
         Loaded model in eval mode
     """
-    model = create_model(architecture).to(device)
-
+    # Load checkpoint to extract args
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    # Extract paired parameter from saved args if available
+    paired = True  # default
+    if 'args' in checkpoint:
+        paired = checkpoint['args'].get('paired', True)
+    
+    # Create model with correct paired parameter
+    model = create_model(architecture, paired=paired).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
@@ -480,12 +487,10 @@ def evaluate_model_group(runs, device, output_dir, num_samples, num_comparison_f
         ref_args = models[0]['run']['args']
 
         print("\nCreating test dataloader...")
-        dataset_type = ref_args.get('dataset', 'unpaired' if ref_args.get('unpaired', False) else 'paired')
-        if unpaired:
-            dataloader = create_test_dataloader_unpaired(ref_args, num_samples)
-        elif dataset_type == 'maps':
+        dataset_type = ref_args.get('dataset', 'hypersim')
+        if dataset_type == 'maps':
             dataloader = create_test_dataloader_maps(ref_args, num_samples)
-        else:
+        else:  # 'hypersim', 'paired', or 'unpaired' all use hypersim dataloader
             dataloader = create_test_dataloader_paired(ref_args, num_samples)
 
         print(f"Test dataset size: {len(dataloader.dataset)}")

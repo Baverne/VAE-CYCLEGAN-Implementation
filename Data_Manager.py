@@ -229,32 +229,15 @@ class HypersimDataset(Dataset):
             
             return paired_result
         else:
-            # Unpaired mode: shuffle y by picking a random sample
+            # Unpaired mode: random y at each access (non-deterministic)
             unpaired_result = {}
             if len(self.modalities) == 2:
                 # x from current index
                 unpaired_result['x'] = result[self.modalities[0]]
                 
-                # y from random index (unpaired)
-                random_idx = random.randint(0, len(self.samples) - 1)
-                random_sample = self.samples[random_idx]
-                random_y_path = random_sample['modality_paths'][self.modalities[1]]
-                random_y_img = Image.open(random_y_path).convert('RGB')
-                
-                # Apply transforms to random y
-                if self.transform is not None:
-                    if self.modalities[1] == 'color' and self.color_transform is not None:
-                        random_y_img = self.color_transform(random_y_img)
-                    random_y_img = self.transform(random_y_img)
-                    if not isinstance(random_y_img, torch.Tensor):
-                        random_y_img = transforms.ToTensor()(random_y_img)
-                else:
-                    if self.modalities[1] == 'color' and self.color_transform is not None:
-                        random_y_img = self.color_transform(random_y_img)
-                    if not isinstance(random_y_img, torch.Tensor):
-                        random_y_img = transforms.ToTensor()(random_y_img)
-                
-                unpaired_result['y'] = random_y_img
+                # y from random index (unpaired, changes every epoch/access)
+                y_idx = random.randint(0, len(self.samples) - 1)
+                unpaired_result['y'] = result[self.modalities[1]] if y_idx == idx else self._load_modality_at_index(y_idx, self.modalities[1])
                 
                 # Keep scene info from x
                 if self.return_scene_info:
@@ -268,6 +251,30 @@ class HypersimDataset(Dataset):
                 raise ValueError("Unpaired mode requires exactly 2 modalities")
         
         return result
+    
+    def _load_modality_at_index(self, idx: int, modality: str) -> torch.Tensor:
+        """
+        Helper method to load a specific modality at a given index.
+        Used for unpaired mode to load y from a different index than x.
+        """
+        sample_info = self.samples[idx]
+        modality_path = sample_info['modality_paths'][modality]
+        img = Image.open(modality_path).convert('RGB')
+        
+        # Apply transforms
+        if self.transform is not None:
+            if modality == 'color' and self.color_transform is not None:
+                img = self.color_transform(img)
+            img = self.transform(img)
+            if not isinstance(img, torch.Tensor):
+                img = transforms.ToTensor()(img)
+        else:
+            if modality == 'color' and self.color_transform is not None:
+                img = self.color_transform(img)
+            if not isinstance(img, torch.Tensor):
+                img = transforms.ToTensor()(img)
+        
+        return img
     
     def get_unique_scenes(self) -> List[str]:
         """Return list of unique scene numbers in the dataset."""
