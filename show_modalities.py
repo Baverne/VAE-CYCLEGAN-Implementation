@@ -139,7 +139,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Visualize Hypersim dataset modalities")
-    parser.add_argument("--dataset", type=str, default="datasets/paired",
+    parser.add_argument("--dataset", type=str, default="dataset/hypersim",
                         help="Path to the Hypersim dataset")
     parser.add_argument("--scene", type=str, default=None,
                         help="Specific scene name (default: first available)")

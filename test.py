@@ -25,7 +25,7 @@ from tqdm import tqdm
 
 # Import networks and data manager
 from Networks import *
-from Data_Manager import HypersimDataset, SatelliteMapDataset
+from Data_Manager import HypersimDataset, SatelliteMapDataset, Summer2WinterDataset
 
 
 def discover_runs(runs_dir='runs'):
@@ -178,7 +178,7 @@ def create_test_dataloader_paired(args, num_samples=None):
     test_transform = create_test_transform_paired(args.get('image_size', 256))
 
     dataset = HypersimDataset(
-        root_dir=args['data_dir'],
+        root_dir=os.path.join(args['data_dir'], 'hypersim'),
         modalities=[args['source_modality'], args['target_modality']],
         transform=test_transform,
         color_transform=None,
@@ -228,8 +228,43 @@ def create_test_dataloader_maps(args, num_samples=None):
     ])
 
     test_dataset = SatelliteMapDataset(
-        root_dir=args['data_dir'] + "/maps",
+        root_dir=os.path.join(args['data_dir'], 'maps'),
         split="val",
+        transform=test_transform
+    )
+
+    if num_samples is not None and num_samples < len(test_dataset):
+        indices = list(range(num_samples))
+        test_dataset = torch.utils.data.Subset(test_dataset, indices)
+
+    return DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.get('num_workers', 4),
+        pin_memory=True
+    )
+
+
+def create_test_dataloader_summer2winter(args, num_samples=None):
+    """
+    Create test dataloader for Summer2Winter Yosemite dataset.
+
+    Args:
+        args: dict with 'data_dir', 'image_size'
+        num_samples: Limit number of samples (None for all)
+
+    Returns:
+        DataLoader for testing
+    """
+    test_transform = transforms.Compose([
+        transforms.Resize((args.get('image_size', 256), args.get('image_size', 256))),
+        transforms.ToTensor(),
+    ])
+
+    test_dataset = Summer2WinterDataset(
+        root_dir=os.path.join(args['data_dir'], 'summer2winter'),
+        split="test",
         transform=test_transform
     )
 
@@ -424,6 +459,14 @@ def get_modality_key(args):
     return f"{args['source_modality']}_to_{args['target_modality']}"
 
 
+def get_dataset_type(run_args):
+    """Determine dataset type from run args, mapping legacy names to current ones."""
+    dataset = run_args.get('dataset', 'hypersim')
+    if dataset in ('paired', 'unpaired'):
+        return 'hypersim'
+    return dataset
+
+
 def evaluate_model_group(runs, device, output_dir, num_samples, num_comparison_figures, unpaired=False):
     """
     Evaluate a group of models (all paired or all unpaired).
@@ -487,10 +530,12 @@ def evaluate_model_group(runs, device, output_dir, num_samples, num_comparison_f
         ref_args = models[0]['run']['args']
 
         print("\nCreating test dataloader...")
-        dataset_type = ref_args.get('dataset', 'hypersim')
+        dataset_type = get_dataset_type(ref_args)
         if dataset_type == 'maps':
             dataloader = create_test_dataloader_maps(ref_args, num_samples)
-        else:  # 'hypersim', 'paired', or 'unpaired' all use hypersim dataloader
+        elif dataset_type == 'summer2winter':
+            dataloader = create_test_dataloader_summer2winter(ref_args, num_samples)
+        else:  # 'hypersim'
             dataloader = create_test_dataloader_paired(ref_args, num_samples)
 
         print(f"Test dataset size: {len(dataloader.dataset)}")
@@ -592,45 +637,38 @@ def evaluate_models(args):
         runs = [r for r in runs if r['architecture'] in args.architectures]
         print(f"\nFiltered to {len(runs)} models matching architectures: {args.architectures}")
 
-    # Determine dataset type for each run (handles legacy 'unpaired' flag and new 'dataset' key)
-    def get_dataset_type(run_args):
-        if 'dataset' in run_args:
-            return run_args['dataset']
-        # Legacy format: convert 'unpaired' boolean to dataset string
-        return 'unpaired' if run_args.get('unpaired', False) else 'paired'
-
     # Group runs by dataset type
-    paired_runs = [r for r in runs if get_dataset_type(r['args']) == 'paired']
-    unpaired_runs = [r for r in runs if get_dataset_type(r['args']) == 'unpaired']
+    hypersim_runs = [r for r in runs if get_dataset_type(r['args']) == 'hypersim']
+    summer2winter_runs = [r for r in runs if get_dataset_type(r['args']) == 'summer2winter']
     maps_runs = [r for r in runs if get_dataset_type(r['args']) == 'maps']
 
     dataset_filter = getattr(args, 'dataset_filter', None)
 
-    # Process paired models
-    if paired_runs and dataset_filter in (None, 'paired'):
+    # Process hypersim models
+    if hypersim_runs and dataset_filter in (None, 'hypersim'):
         print(f"\n{'='*60}")
-        print(f"Evaluating {len(paired_runs)} paired dataset models")
+        print(f"Evaluating {len(hypersim_runs)} Hypersim dataset models")
         print(f"{'='*60}")
 
         evaluate_model_group(
-            paired_runs,
+            hypersim_runs,
             device,
-            output_dir / 'paired',
+            output_dir / 'hypersim',
             args.num_samples,
             args.num_comparison_figures,
             unpaired=False
         )
 
-    # Process unpaired models
-    if unpaired_runs and dataset_filter in (None, 'unpaired'):
+    # Process summer2winter models
+    if summer2winter_runs and dataset_filter in (None, 'summer2winter'):
         print(f"\n{'='*60}")
-        print(f"Evaluating {len(unpaired_runs)} unpaired dataset models")
+        print(f"Evaluating {len(summer2winter_runs)} Summer2Winter dataset models")
         print(f"{'='*60}")
 
         evaluate_model_group(
-            unpaired_runs,
+            summer2winter_runs,
             device,
-            output_dir / 'unpaired',
+            output_dir / 'summer2winter',
             args.num_samples,
             args.num_comparison_figures,
             unpaired=True
@@ -668,7 +706,7 @@ if __name__ == '__main__':
     parser.add_argument('--architectures', type=str, nargs='+', default=None,
                         help='Filter to specific architectures (e.g., autoencoder vae aegan)')
     parser.add_argument('--dataset_filter', type=str, default=None,
-                        choices=['paired', 'unpaired', 'maps'],
+                        choices=['hypersim', 'summer2winter', 'maps'],
                         help='Only evaluate models trained on this dataset')
 
     # Test configuration

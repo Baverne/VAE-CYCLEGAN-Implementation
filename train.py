@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 # Import networks, losses, data manager, and utilities
 from Networks import *
-from Data_Manager import HypersimDataset, SatelliteMapDataset
+from Data_Manager import HypersimDataset, SatelliteMapDataset, Summer2WinterDataset
 from utils import (
     save_checkpoint,
     load_checkpoint,
@@ -197,10 +197,10 @@ def create_dataloaders_hypersim(args):
     
     # Create dataset with transforms
     train_dataset = HypersimDataset(
-        root_dir=args.data_dir,
+        root_dir=os.path.join(args.data_dir, 'hypersim'),
         modalities=[args.source_modality, args.target_modality],
         transform=general_transform,
-        color_transform=color_transform, 
+        color_transform=color_transform,
         return_scene_info=True,
         paired_mode=args.paired  # Use paired or unpaired mode based on args
     )
@@ -265,15 +265,74 @@ def create_dataloaders_maps(args):
     ])
 
     train_dataset = SatelliteMapDataset(
-        root_dir=args.data_dir + "/maps",
+        root_dir=os.path.join(args.data_dir, 'maps'),
         split="train",
         transform=maps_transform
     )
 
     test_dataset = SatelliteMapDataset(
-        root_dir=args.data_dir + "/maps",
+        root_dir=os.path.join(args.data_dir, 'maps'),
         split="val",
         transform=maps_test_transform
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    print(f"Training samples: {len(train_dataset)}")
+    print(f"Testing samples: {len(test_dataset)}")
+
+    return train_loader, test_loader
+
+
+def create_dataloaders_summer2winter(args):
+    """
+    Create train and test dataloaders for Summer2Winter Yosemite dataset.
+
+    Returns:
+        train_loader: DataLoader for training
+        test_loader: DataLoader for testing
+    """
+    train_transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomResizedCrop(
+            size=args.image_size,
+            scale=(0.33, 1.0),
+            ratio=(1, 1),
+            interpolation=transforms.InterpolationMode.BICUBIC
+        ),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.ToTensor(),
+    ])
+
+    test_transform = transforms.Compose([
+        transforms.Resize((args.image_size, args.image_size)),
+        transforms.ToTensor(),
+    ])
+
+    train_dataset = Summer2WinterDataset(
+        root_dir=os.path.join(args.data_dir, 'summer2winter'),
+        split="train",
+        transform=train_transform
+    )
+
+    test_dataset = Summer2WinterDataset(
+        root_dir=os.path.join(args.data_dir, 'summer2winter'),
+        split="test",
+        transform=test_transform
     )
 
     train_loader = DataLoader(
@@ -307,17 +366,20 @@ def main(args):
 
     # Set default modality names based on dataset
     dataset_modality_defaults = {
-        'hypersim': ('depth', 'normal'),
-        'maps':     ('satellite', 'map'),
+        'hypersim':       ('depth', 'normal'),
+        'summer2winter':  ('summer', 'winter'),
+        'maps':           ('satellite', 'map'),
     }
-    # Support legacy 'paired'/'unpaired' dataset names (both use Hypersim)
-    if args.dataset in ['paired', 'unpaired']:
-        dataset_modality_defaults[args.dataset] = ('depth', 'normal')
     default_source, default_target = dataset_modality_defaults[args.dataset]
     if args.source_modality is None:
         args.source_modality = default_source
     if args.target_modality is None:
         args.target_modality = default_target
+
+    # Validate --paired flag applicability
+    if args.dataset == 'summer2winter' and args.paired:
+        print("WARNING: --paired flag is ignored for summer2winter dataset (inherently unpaired)")
+        args.paired = False
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
@@ -367,7 +429,10 @@ def main(args):
     if args.dataset == 'maps':
         train_loader, test_loader = create_dataloaders_maps(args)
         print("Using maps dataset (satellite-to-map)")
-    else:  # 'hypersim', 'paired', or 'unpaired' all use Hypersim dataset
+    elif args.dataset == 'summer2winter':
+        train_loader, test_loader = create_dataloaders_summer2winter(args)
+        print("Using Summer2Winter Yosemite dataset (unpaired)")
+    else:  # 'hypersim'
         train_loader, test_loader = create_dataloaders_hypersim(args)
         print(f"Using Hypersim dataset in {'paired' if args.paired else 'unpaired'} mode")
     
@@ -540,7 +605,7 @@ if __name__ == '__main__':
                         help='Path to a pretrained DoubleVariationalAutoencoder checkpoint to initialize CycleVAE/CycleVAEGAN (both G and F)')
     
     # Data parameters
-    parser.add_argument('--data_dir', type=str, default='datasets',
+    parser.add_argument('--data_dir', type=str, default='dataset',
                         help='Path to dataset directory')
     parser.add_argument('--source_modality', type=str, default=None,
                         help='Source modality (input). Defaults: hypersim=depth, maps=satellite')
@@ -551,8 +616,8 @@ if __name__ == '__main__':
     parser.add_argument('--test_split', type=float, default=0.1,
                         help='Test split ratio')
     parser.add_argument('--dataset', type=str, default='hypersim',
-                        choices=['hypersim', 'paired', 'unpaired', 'maps'],
-                        help='Dataset to use: hypersim (depth/normal/etc), maps (satellite-to-map). Note: paired/unpaired are legacy names for hypersim')
+                        choices=['hypersim', 'summer2winter', 'maps'],
+                        help='Dataset to use: hypersim (depth/normal/etc), summer2winter (unpaired season transfer), maps (satellite-to-map)')
     
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=5,

@@ -47,7 +47,7 @@ The full Hypersim dataset is quite large (~1.9 TB). For practical purposes, we p
 The dataset can be downloaded using the provided script that samples diverse images from the full Hypersim dataset:
 
 ```powershell
-python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_modalities --repo_path path\to\ml-hypersim --output_dir datasets\paired --seed 42
+python Dataset\download_dataset_sample.py --num_images 5000 --modalities all_modalities --repo_path path\to\ml-hypersim --output_dir dataset\hypersim --seed 42
 ```
 
 **Prerequisites:**
@@ -153,9 +153,9 @@ For unpaired image-to-image translation tasks (e.g., season transfer), we use [S
 **Steps to access and use the dataset:**
 1. Go to the [Summer2Winter Yosemite Kaggle page](https://www.kaggle.com/datasets/balraj98/summer2winter-yosemite?resource=download).
 2. Download the dataset (requires a Kaggle account).
-3. Extract the contents and place them in the `datasets/unpaired/` directory:
+3. Extract the contents and place them in the `dataset/summer2winter/` directory:
    ```bash
-   unzip summer2winter-yosemite.zip -d datasets/unpaired/
+   unzip summer2winter-yosemite.zip -d dataset/summer2winter/
    ```
 4. The dataset contains two folders: `summer` and `winter`, each with unpaired images for the respective seasons.
 5. Use these folders for unpaired translation experiments (e.g., training CycleGAN).
@@ -163,8 +163,8 @@ For unpaired image-to-image translation tasks (e.g., season transfer), we use [S
 **Note:**
 - If you use Kaggle's API, you can download directly with:
   ```bash
-  kaggle datasets download -d balraj98/summer2winter-yosemite -p datasets/unpaired/
-  unzip datasets/unpaired/summer2winter-yosemite.zip -d datasets/unpaired/
+  kaggle datasets download -d balraj98/summer2winter-yosemite -p dataset/summer2winter/
+  unzip dataset/summer2winter/summer2winter-yosemite.zip -d dataset/summer2winter/
   ```
 - Make sure you have the [Kaggle API](https://github.com/Kaggle/kaggle-api) installed and configured.
 

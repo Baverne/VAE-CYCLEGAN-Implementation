@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Data Manager for Hypersim Dataset
+Data Manager for training datasets (Hypersim, Summer2Winter, Maps)
 Provides PyTorch DataLoader with support for multiple modalities and data augmentation.
 """
 
@@ -18,7 +18,7 @@ import torchvision.transforms as transforms
 class HypersimDataset(Dataset):
     """
     Dataset structure:
-        datasets/
+        dataset/hypersim/
             ai_001_001_unknown/
                 cam_00/
                     frame_0000_depth.png
@@ -386,6 +386,71 @@ class SatelliteMapDataset(Dataset):
         return {'x': satellite, 'y': map_img}
 
 
+class Summer2WinterDataset(Dataset):
+    """
+    Unpaired image-to-image dataset (CycleGAN format).
+
+    Directory structure:
+        root_dir/
+            trainA/    <- Domain A images (e.g., summer)
+            trainB/    <- Domain B images (e.g., winter)
+            testA/     <- Domain A test images
+            testB/     <- Domain B test images
+
+    Returns:
+        dict with 'x' (domain A image) and 'y' (domain B image, randomly sampled)
+    """
+
+    def __init__(self, root_dir, split="train", transform=None):
+        self.root_dir = root_dir
+        self.split = split
+        self.transform = transform
+
+        self.dir_A = os.path.join(root_dir, f"{split}A")
+        self.dir_B = os.path.join(root_dir, f"{split}B")
+
+        if not os.path.isdir(self.dir_A):
+            raise ValueError(f"Directory not found: {self.dir_A}")
+        if not os.path.isdir(self.dir_B):
+            raise ValueError(f"Directory not found: {self.dir_B}")
+
+        self.images_A = sorted([
+            f for f in os.listdir(self.dir_A)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+        self.images_B = sorted([
+            f for f in os.listdir(self.dir_B)
+            if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+        ])
+
+        if len(self.images_A) == 0:
+            raise ValueError(f"No images found in {self.dir_A}")
+        if len(self.images_B) == 0:
+            raise ValueError(f"No images found in {self.dir_B}")
+
+        print(f"  Loaded {split} split: {len(self.images_A)} domain A, {len(self.images_B)} domain B images")
+
+    def __len__(self):
+        return max(len(self.images_A), len(self.images_B))
+
+    def __getitem__(self, idx):
+        img_A_path = os.path.join(self.dir_A, self.images_A[idx % len(self.images_A)])
+        idx_B = random.randint(0, len(self.images_B) - 1)
+        img_B_path = os.path.join(self.dir_B, self.images_B[idx_B])
+
+        img_A = Image.open(img_A_path).convert('RGB')
+        img_B = Image.open(img_B_path).convert('RGB')
+
+        if self.transform is not None:
+            img_A = self.transform(img_A)
+            img_B = self.transform(img_B)
+        else:
+            img_A = transforms.ToTensor()(img_A)
+            img_B = transforms.ToTensor()(img_B)
+
+        return {'x': img_A, 'y': img_B}
+
+
 if __name__ == "__main__":
     import torchvision.utils as vutils
 
@@ -409,7 +474,7 @@ if __name__ == "__main__":
 
     # Create dataset in paired mode (x=depth, y=normal)
     dataset = HypersimDataset(
-        root_dir='datasets',
+        root_dir='dataset/hypersim',
         modalities=['depth', 'normal'],
         transform=general_transform,
         color_transform=color_transform,
