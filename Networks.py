@@ -1061,7 +1061,7 @@ class AEGAN (nn.Module):
         self.loss_trans_fn = TranslationLoss()
         self.loss_gan_gen_fn = GANLossGenerator()
         self.loss_gan_disc_fn = GANLossDiscriminator()
-        self.loss_identity_fn = nn.L1Loss()  # Identity loss as L1 loss between Gy and y
+        self.loss_identity_fn = TranslationLoss()  # Identity loss as L1 loss between Gy and y
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
 
@@ -1240,7 +1240,7 @@ class VAEGAN (nn.Module):
         self.translation_loss = TranslationLoss()
         self.gan_loss_gen = GANLossGenerator()
         self.gan_loss_disc = GANLossDiscriminator()
-        self.identity_loss = IdentityLoss()
+        self.identity_loss = TranslationLoss()  # Identity loss: ||G(y) - y||_1
         self.kl_loss = KLDivergenceLoss()
         self.lambda_gan = kwargs.get('lambda_gan', 1.0)
         self.lambda_identity = kwargs.get('lambda_identity', 5.0)
@@ -1271,7 +1271,7 @@ class VAEGAN (nn.Module):
         # Generator losses
         loss_trans = self.translation_loss(Gx, y)
         total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dy, DGx)
-        loss_id = self.identity_loss(x, y, x, Gy)
+        loss_id = self.identity_loss(Gy, y)  # Identity: ||G(y) - y||_1
         loss_kl = self.kl_loss(mu, logvar)
         G_loss = (self.lambda_recon * loss_trans + self.lambda_gan * total_loss_gan +
                    self.lambda_identity * loss_id + self.lambda_kl * loss_kl)
@@ -1328,7 +1328,7 @@ class VAEGAN (nn.Module):
             # Compute losses
             loss_trans = self.translation_loss(Gx, y)
             total_loss_gan, loss_gan_real, loss_gan_fake = self.gan_loss_gen(Dx, DGx)
-            loss_id = self.identity_loss(x, y, x, Gy)
+            loss_id = self.identity_loss(Gy, y)  # Identity: ||G(y) - y||_1
             loss_kl = self.kl_loss(mu, logvar)
             G_loss = (self.lambda_recon * loss_trans + self.lambda_gan * total_loss_gan +
                     self.lambda_identity * loss_id + self.lambda_kl * loss_kl)

@@ -41,20 +41,28 @@ class CycleConsistencyLoss(nn.Module):
 
 class IdentityLoss(nn.Module):
     """
-    Identity Loss
-    L_id = ||G(x) - x||_1 + ||F(y) - y||_1
+    Identity Loss for CycleGAN
+    L_id = ||F(x) - x||_1 + ||G(y) - y||_1
 
-    The idea is that if we feed images of domain Y to G (which is supposed to map X->Y),
-    it should return the same image (similarly for F with images from domain X).
+    The idea is that:
+    - F transforms Y->X, so F(x) should leave x unchanged (x is already in X)
+    - G transforms X->Y, so G(y) should leave y unchanged (y is already in Y)
     """
     def __init__(self):
         super(IdentityLoss, self).__init__()
         self.l1_loss = nn.L1Loss()
     
-    def forward(self, x, y, Gx, Fy):
-        loss_G = self.l1_loss(Gx, x)  # ||G(x) - x||_1
-        loss_F = self.l1_loss(Fy, y)  # ||F(y) - y||_1
-        return loss_G + loss_F
+    def forward(self, x, y, Fx, Gy):
+        """
+        Args:
+            x: image from domain X
+            y: image from domain Y
+            Fx: F(x) - F applied to x (should be close to x)
+            Gy: G(y) - G applied to y (should be close to y)
+        """
+        loss_F = self.l1_loss(Fx, x)  # ||F(x) - x||_1
+        loss_G = self.l1_loss(Gy, y)  # ||G(y) - y||_1
+        return loss_F + loss_G
 
 class GANLossGenerator(nn.Module):
     """
